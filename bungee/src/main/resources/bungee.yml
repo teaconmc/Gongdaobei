@@ -1,0 +1,4 @@
+name: Gongdaobei
+main: org.teacon.gongdaobei.GongdaobeiBungee
+version: @VERSION@
+author: TeaConMC

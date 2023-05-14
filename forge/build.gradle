@@ -1,0 +1,98 @@
+plugins {
+    id 'eclipse'
+    id 'maven-publish'
+    id 'net.minecraftforge.gradle' version '5.1.+'
+}
+
+group = rootProject.group
+version = rootProject.version
+archivesBaseName = 'Gongdaobei-1.19-Forge'
+
+java.toolchain.languageVersion = JavaLanguageVersion.of(17)
+
+println "Java: ${System.getProperty 'java.version'}, JVM: ${System.getProperty 'java.vm.version'} (${System.getProperty 'java.vendor'}), Arch: ${System.getProperty 'os.arch'}"
+
+minecraft {
+    mappings channel: 'official', version: '1.19.4'
+    runs {
+        client {
+            workingDirectory project.file('run')
+            property 'forge.logging.markers', 'REGISTRIES'
+            property 'forge.logging.console.level', 'debug'
+            property 'forge.enabledGameTestNamespaces', 'gongdaobei'
+            mods {
+                gongdaobei { source sourceSets.main }
+            }
+            lazyToken('minecraft_classpath') {
+                rootProject.configurations.shadow.asPath
+            }
+        }
+        server {
+            workingDirectory project.file('run')
+            property 'forge.logging.markers', 'REGISTRIES'
+            property 'forge.logging.console.level', 'debug'
+            property 'forge.enabledGameTestNamespaces', 'gongdaobei'
+            mods {
+                gongdaobei { source sourceSets.main }
+            }
+            lazyToken('minecraft_classpath') {
+                rootProject.configurations.shadow.asPath
+            }
+        }
+        gameTestServer {
+            workingDirectory project.file('run')
+            property 'forge.logging.markers', 'REGISTRIES'
+            property 'forge.logging.console.level', 'debug'
+            property 'forge.enabledGameTestNamespaces', 'gongdaobei'
+            mods {
+                gongdaobei { source sourceSets.main }
+            }
+            lazyToken('minecraft_classpath') {
+                rootProject.configurations.shadow.asPath
+            }
+        }
+        data {
+            workingDirectory project.file('run')
+            property 'forge.logging.markers', 'REGISTRIES'
+            property 'forge.logging.console.level', 'debug'
+            args '--mod', 'gongdaobei', '--all', '--output', file('src/generated/resources/'), '--existing', file('src/main/resources/')
+            mods {
+                gongdaobei { source sourceSets.main }
+            }
+            lazyToken('minecraft_classpath') {
+                rootProject.configurations.shadow.asPath
+            }
+        }
+    }
+}
+
+sourceSets.main.resources { srcDir 'src/generated/resources' }
+
+repositories {
+    // Put repositories for dependencies here
+    // ForgeGradle automatically adds the Forge maven and Maven Central for you
+}
+
+dependencies {
+    minecraft 'net.minecraftforge:forge:1.19.4-45.0.59'
+    implementation 'com.vdurmont:semver4j:3.1.0'
+    implementation 'io.lettuce:lettuce-core:6.2.4.RELEASE'
+}
+
+jar {
+    manifest {
+        attributes([
+                "Specification-Title"     : "Gongdaobei",
+                "Specification-Vendor"    : "TeaConMC",
+                "Specification-Version"   : "1",
+                "Implementation-Title"    : rootProject.name,
+                "Implementation-Version"  : project.jar.archiveVersion,
+                "Implementation-Vendor"   : "TeaConMC",
+                "Implementation-Timestamp": new Date().format("yyyy-MM-dd'T'HH:mm:ssZ")
+        ])
+    }
+}
+
+jar.finalizedBy('reobfJar')
+
+tasks.withType(JavaCompile).configureEach { options.encoding = 'UTF-8' }

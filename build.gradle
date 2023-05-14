@@ -1,0 +1,35 @@
+plugins {
+    id 'java'
+    id 'com.github.johnrengelman.shadow' version '7.1.2'
+}
+
+version = '1.0.0'
+group = 'org.teacon'
+archivesBaseName = 'Gongdaobei-1.19-Universal'
+
+repositories {
+    mavenCentral()
+}
+
+configurations {
+    compileClasspath.extendsFrom shadow
+}
+
+dependencies {
+    compileOnly project(':forge')
+    compileOnly project(':bungee')
+    shadow 'com.vdurmont:semver4j:3.1.0'
+    shadow 'io.lettuce:lettuce-core:6.2.4.RELEASE'
+}
+
+shadowJar {
+    archiveClassifier.set(null)
+    configurations = [rootProject.configurations.compileClasspath]
+    dependencies {
+        it.exclude it.dependency('io.netty:.*')
+    }
+    relocate 'reactor', 'org.teacon.gongdaobei.reactor'
+    relocate 'io.lettuce', 'org.teacon.gongdaobei.lettuce'
+    relocate 'com.vdurmont.semver4j', 'org.teacon.gongdaobei.semver4j'
+    relocate 'org.reactivestreams', 'org.teacon.gongdaobei.reactivestreams'
+}
