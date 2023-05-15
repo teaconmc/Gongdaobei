@@ -19,6 +19,7 @@ dependencies {
     compileOnly project(':forge')
     compileOnly project(':bungee')
     shadow 'com.vdurmont:semver4j:3.1.0'
+    shadow 'com.moandjiezana.toml:toml4j:0.7.2'
     shadow 'io.lettuce:lettuce-core:6.2.4.RELEASE'
 }
 
