@@ -7,9 +7,12 @@ group = rootProject.group
 version = rootProject.version
 archivesBaseName = 'Gongdaobei-1.19-Bungee'
 
-java.toolchain.languageVersion = JavaLanguageVersion.of(17)
+java.toolchain.languageVersion.set(JavaLanguageVersion.of(17))
 
-println "Java: ${System.getProperty 'java.version'}, JVM: ${System.getProperty 'java.vm.version'} (${System.getProperty 'java.vendor'}), Arch: ${System.getProperty 'os.arch'}"
+configurations.register('bungeeJar') {
+    canBeConsumed = true
+    canBeResolved = false
+}
 
 repositories {
     mavenCentral()
@@ -21,8 +24,10 @@ blossom {
 }
 
 dependencies {
+    implementation project(path: ':util')
     compileOnly 'net.md-5:bungeecord-api:1.19-R0.1-SNAPSHOT'
-    implementation 'com.vdurmont:semver4j:3.1.0'
-    implementation 'com.moandjiezana.toml:toml4j:0.7.2'
-    implementation 'io.lettuce:lettuce-core:6.2.4.RELEASE'
+}
+
+artifacts {
+    bungeeJar jar
 }

@@ -1,6 +1,6 @@
 plugins {
+    id 'java'
     id 'eclipse'
-    id 'maven-publish'
     id 'net.minecraftforge.gradle' version '5.1.+'
 }
 
@@ -8,9 +8,12 @@ group = rootProject.group
 version = rootProject.version
 archivesBaseName = 'Gongdaobei-1.19-Forge'
 
-java.toolchain.languageVersion = JavaLanguageVersion.of(17)
+java.toolchain.languageVersion.set(JavaLanguageVersion.of(17))
 
-println "Java: ${System.getProperty 'java.version'}, JVM: ${System.getProperty 'java.vm.version'} (${System.getProperty 'java.vendor'}), Arch: ${System.getProperty 'os.arch'}"
+configurations.register('forgeJar') {
+    canBeConsumed = true
+    canBeResolved = false
+}
 
 minecraft {
     mappings channel: 'official', version: '1.19.4'
@@ -74,26 +77,14 @@ repositories {
 }
 
 dependencies {
+    implementation project(path: ':util')
     minecraft 'net.minecraftforge:forge:1.19.4-45.0.59'
-    implementation 'com.vdurmont:semver4j:3.1.0'
-    implementation 'com.moandjiezana.toml:toml4j:0.7.2'
-    implementation 'io.lettuce:lettuce-core:6.2.4.RELEASE'
-}
-
-jar {
-    manifest {
-        attributes([
-                "Specification-Title"     : "Gongdaobei",
-                "Specification-Vendor"    : "TeaConMC",
-                "Specification-Version"   : "1",
-                "Implementation-Title"    : rootProject.name,
-                "Implementation-Version"  : project.jar.archiveVersion,
-                "Implementation-Vendor"   : "TeaConMC",
-                "Implementation-Timestamp": new Date().format("yyyy-MM-dd'T'HH:mm:ssZ")
-        ])
-    }
 }
 
 jar.finalizedBy('reobfJar')
+
+artifacts {
+    forgeJar jar
+}
 
 tasks.withType(JavaCompile).configureEach { options.encoding = 'UTF-8' }

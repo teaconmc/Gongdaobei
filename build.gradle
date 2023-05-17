@@ -7,17 +7,23 @@ version = '1.0.0'
 group = 'org.teacon'
 archivesBaseName = 'Gongdaobei-1.19-Universal'
 
+java.toolchain.languageVersion.set(JavaLanguageVersion.of(17))
+
+println "Java: ${System.getProperty 'java.version'}, JVM: ${System.getProperty 'java.vm.version'} (${System.getProperty 'java.vendor'}), Arch: ${System.getProperty 'os.arch'}"
+
+configurations.register('universalClasspath') {
+    canBeConsumed = false
+    canBeResolved = true
+}
+
 repositories {
     mavenCentral()
 }
 
-configurations {
-    compileClasspath.extendsFrom shadow
-}
-
 dependencies {
-    compileOnly project(':forge')
-    compileOnly project(':bungee')
+    universalClasspath project(path: ':util', configuration: 'utilJar')
+    universalClasspath project(path: ':forge', configuration: 'forgeJar')
+    universalClasspath project(path: ':bungee', configuration: 'bungeeJar')
     shadow 'com.vdurmont:semver4j:3.1.0'
     shadow 'com.moandjiezana.toml:toml4j:0.7.2'
     shadow 'io.lettuce:lettuce-core:6.2.4.RELEASE'
@@ -25,12 +31,29 @@ dependencies {
 
 shadowJar {
     archiveClassifier.set(null)
-    configurations = [rootProject.configurations.compileClasspath]
+    configurations = [project.configurations.universalClasspath, project.configurations.shadow]
     dependencies {
         it.exclude it.dependency('io.netty:.*')
+        it.exclude it.dependency('com.google.code.gson:.*')
+    }
+    manifest {
+        attributes([
+                "Specification-Title"     : "Gongdaobei",
+                "Specification-Vendor"    : "TeaConMC",
+                "Specification-Version"   : "1",
+                "Implementation-Title"    : rootProject.name,
+                "Implementation-Version"  : project.jar.archiveVersion,
+                "Implementation-Vendor"   : "TeaConMC",
+                "Implementation-Timestamp": new Date().format("yyyy-MM-dd'T'HH:mm:ssZ")
+        ])
     }
     relocate 'reactor', 'org.teacon.gongdaobei.reactor'
     relocate 'io.lettuce', 'org.teacon.gongdaobei.lettuce'
+    relocate 'com.moandjiezana.toml', 'org.teacon.gongdaobei.toml'
     relocate 'com.vdurmont.semver4j', 'org.teacon.gongdaobei.semver4j'
     relocate 'org.reactivestreams', 'org.teacon.gongdaobei.reactivestreams'
+}
+
+artifacts {
+    archives shadowJar
 }

@@ -7,4 +7,4 @@ pluginManagement {
 
 rootProject.name = 'Gongdaobei'
 
-include 'forge', 'bungee'
+include 'util', 'forge', 'bungee'

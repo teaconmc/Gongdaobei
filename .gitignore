@@ -14,6 +14,7 @@ out
 .idea
 
 # gradle
+common/build
 bungee/build
 forge/build
 build
