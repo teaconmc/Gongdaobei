@@ -1,5 +1,6 @@
 package org.teacon.gongdaobei;
 
+import com.google.common.collect.ImmutableMap;
 import com.google.common.net.HostAndPort;
 import com.moandjiezana.toml.Toml;
 import com.moandjiezana.toml.TomlWriter;
@@ -58,8 +59,8 @@ public final class GongdaobeiTomlConfig {
         public Common save(Path configFile) {
             try (var output = Files.newBufferedWriter(configFile, StandardOpenOption.CREATE)) {
                 var toml = new TomlWriter.Builder().indentTablesBy(0).indentValuesBy(0).build();
-                var common = Map.of(DISCOVERY_REDIS_URI, this.discoveryRedisUri.toURI().toString());
-                toml.write(Map.of("common", common), output);
+                var common = ImmutableMap.of(DISCOVERY_REDIS_URI, this.discoveryRedisUri.toURI().toString());
+                toml.write(ImmutableMap.of("common", common), output);
                 return this;
             } catch (IOException | ClassCastException e) {
                 throw new IllegalArgumentException(e);
@@ -87,14 +88,14 @@ public final class GongdaobeiTomlConfig {
         public Service save(Path configFile) {
             try (var output = Files.newBufferedWriter(configFile, StandardOpenOption.CREATE)) {
                 var toml = new TomlWriter.Builder().indentTablesBy(0).indentValuesBy(0).build();
-                var common = Map.of(DISCOVERY_REDIS_URI, this.discoveryRedisUri.toURI().toString());
-                var service = Map.of(
+                var common = ImmutableMap.of(DISCOVERY_REDIS_URI, this.discoveryRedisUri.toURI().toString());
+                var service = ImmutableMap.of(
                         INTERNAL_ADDRESS, this.internalAddress.toString(),
                         EXTERNAL_ADDRESSES, this.externalAddresses.stream().map(HostAndPort::toString).toList(),
                         IS_FALLBACK_SERVER, this.isFallbackServer,
                         VERSION, this.version.toString(),
                         AFFINITY_MILLIS, this.affinityMillis);
-                toml.write(Map.of("common", common, "service", service), output);
+                toml.write(ImmutableMap.of("common", common, "service", service), output);
                 return this;
             } catch (IOException | ClassCastException e) {
                 throw new IllegalArgumentException(e);
