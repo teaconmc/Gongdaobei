@@ -54,6 +54,8 @@ shadowJar {
     relocate 'org.reactivestreams', 'org.teacon.gongdaobei.reactivestreams'
 }
 
+jar.enabled = false
+
 artifacts {
     archives shadowJar
 }
