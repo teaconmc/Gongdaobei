@@ -1,6 +1,7 @@
 package org.teacon.gongdaobei;
 
 import com.google.common.base.Preconditions;
+import com.google.common.collect.Sets;
 import com.google.common.net.HostAndPort;
 import io.lettuce.core.RedisClient;
 import io.lettuce.core.api.StatefulRedisConnection;
@@ -119,7 +120,7 @@ public final class GongdaobeiBungee extends Plugin {
 
         @EventHandler
         public void on(ServerDisconnectEvent event) {
-            GongdaobeiUtil.getHostAndPort(event.getTarget().getName(), "gongdaobei:").ifPresent(addr -> {
+            GongdaobeiUtil.getHostAndPort(event.getTarget().getName(), "gongdaobei:", true).ifPresent(addr -> {
                 var params = this.serviceParams.get().get(addr);
                 if (params != null && !params.isRetired) {
                     var playerUniqueId = event.getPlayer().getUniqueId();
@@ -140,10 +141,9 @@ public final class GongdaobeiBungee extends Plugin {
                 var playerExternalAddr = player.getPendingConnection().getVirtualHost();
                 for (var entry : this.serviceParams.get().entrySet()) {
                     var params = entry.getValue();
-                    var isTarget = !params.isRetired && params.externalAddresses
-                            .stream().map(addr -> InetSocketAddress.createUnresolved(
-                                    addr.getHost(), addr.getPortOrDefault(playerExternalAddr.getPort())))
-                            .anyMatch(playerExternalAddr::equals);
+                    var isTarget = !params.isRetired && params.externalAddresses.stream()
+                            .filter(addr -> addr.getHost().equals(playerExternalAddr.getHostString()))
+                            .anyMatch(addr -> !addr.hasPort() || addr.getPort() == playerExternalAddr.getPort());
                     if (isTarget) {
                         if (params.version.compareTo(latestTargetVersion) > 0) {
                             latestTargetVersion = params.version;
@@ -174,13 +174,16 @@ public final class GongdaobeiBungee extends Plugin {
                     var online = affinityParams.get().onlinePlayers;
                     var maximum = affinityParams.get().maximumPlayers;
                     if (online < maximum) {
-                        this.logger.info("Affinity server found, send the player to " + affinityHost.get());
+                        this.logger.info("Affinity server found, send the player to the " +
+                                "affinity server (" + affinityHost.get() + ", choices: " + Sets.union(
+                                targetChoicesByInternalAddr.keySet(), fallbackChoicesByInternalAddr.keySet()) + ")");
                         event.setTarget(this.cachedServerInfoMap.get(affinityHost.get()));
                         return;
                     }
                 }
                 // weighted random choices
-                for (var choices : List.of(targetChoicesByInternalAddr, fallbackChoicesByInternalAddr)) {
+                for (var isFallback : List.of(false, true)) {
+                    var choices = isFallback ? fallbackChoicesByInternalAddr : targetChoicesByInternalAddr;
                     var online = choices.values().stream().mapToInt(p -> p.onlinePlayers).toArray();
                     var maximum = choices.values().stream().mapToInt(p -> p.maximumPlayers).toArray();
                     var maxSpaceRatio = IntStream.range(0, choices.size()).mapToDouble(i ->
@@ -193,7 +196,8 @@ public final class GongdaobeiBungee extends Plugin {
                         var next = iterator.next();
                         random -= weights[i];
                         if (random < 0.0) {
-                            this.logger.info("Load balancing performed, send the player to " + next);
+                            this.logger.info("Load balancing performed, send the player to the " + (isFallback
+                                    ? "fallback" : "target") + " server (" + next + ", choices: " + choices.keySet() + ")");
                             event.setTarget(this.cachedServerInfoMap.get(next));
                             return;
                         }

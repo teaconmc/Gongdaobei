@@ -23,7 +23,7 @@ public final class GongdaobeiServiceParams {
         this.isFallback = Boolean.parseBoolean(serviceParams.getOrDefault("config:fallback", "false"));
         this.externalAddresses = List.of(Arrays
                 .stream(serviceParams.getOrDefault("config:external", "").stripLeading().split("\\s+"))
-                .flatMap(s -> GongdaobeiUtil.getHostAndPort(s, "").stream()).toArray(HostAndPort[]::new));
+                .flatMap(s -> GongdaobeiUtil.getHostAndPort(s, "", false).stream()).toArray(HostAndPort[]::new));
         this.motd = serviceParams.getOrDefault("config:motd", "");
         this.version = new GongdaobeiTomlConfig.VersionPattern(serviceParams.getOrDefault("config:version", ""), Function.identity());
         this.affinityMillis = Long.parseUnsignedLong(serviceParams.getOrDefault("config:affinity", "0"));

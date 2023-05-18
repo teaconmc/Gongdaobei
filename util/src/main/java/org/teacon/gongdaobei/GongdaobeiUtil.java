@@ -21,7 +21,7 @@ public final class GongdaobeiUtil {
     public static Optional<HostAndPort> getAffinityTarget(
             UUID playerUniqueId, CompletableFuture<? extends StatefulRedisConnection<String, String>> conn) {
         var targetString = conn.join().sync().get("gongdaobei:affinity:" + playerUniqueId);
-        return Optional.ofNullable(targetString).flatMap(input -> getHostAndPort(input, ""));
+        return Optional.ofNullable(targetString).flatMap(input -> getHostAndPort(input, "", true));
     }
 
     public static void setAffinityTarget(
@@ -37,7 +37,7 @@ public final class GongdaobeiUtil {
         var scanned = ScanIterator.scan(commands, new ScanArgs().match("gongdaobei:service:*"));
         while (scanned.hasNext()) {
             var key = scanned.next();
-            var addr = GongdaobeiUtil.getHostAndPort(key, "gongdaobei:service:");
+            var addr = GongdaobeiUtil.getHostAndPort(key, "gongdaobei:service:", true);
             addr.ifPresent(h -> params.put(h, GongdaobeiServiceParams.fromParams(commands.hgetall(key))));
         }
         return Map.copyOf(params);
@@ -52,11 +52,11 @@ public final class GongdaobeiUtil {
         commands.pexpire(key, 5000L);
     }
 
-    public static Optional<HostAndPort> getHostAndPort(String input, String prefix) {
+    public static Optional<HostAndPort> getHostAndPort(String input, String prefix, boolean checkPort) {
         try {
             Preconditions.checkArgument(input.startsWith(prefix));
             var addr = HostAndPort.fromString(input.substring(prefix.length()));
-            Preconditions.checkArgument(addr.requireBracketsForIPv6().hasPort());
+            Preconditions.checkArgument(addr.requireBracketsForIPv6().hasPort() || !checkPort);
             return Optional.of(addr);
         } catch (IllegalArgumentException e) {
             return Optional.empty();
