@@ -39,5 +39,5 @@ isFallbackServer = true
 version = "${gongdaobei.service.version:-1.0.0}"
 # 亲和有效时间，单位毫秒
 # 玩家在亲和有效时间内的重连时，将分配到上一个连接的服务器
-affinityMillis = 5000
+affinityMillis = 1200000
 ```
