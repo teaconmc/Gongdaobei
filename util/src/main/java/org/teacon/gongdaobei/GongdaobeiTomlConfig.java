@@ -7,9 +7,8 @@ import com.moandjiezana.toml.TomlWriter;
 import com.vdurmont.semver4j.Semver;
 import com.vdurmont.semver4j.SemverException;
 import io.lettuce.core.RedisURI;
-import org.apache.commons.lang3.StringUtils;
-import org.apache.commons.lang3.text.StrSubstitutor;
 
+import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 import java.io.IOException;
 import java.io.Reader;
@@ -17,8 +16,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
+import java.util.function.Function;
 
 public final class GongdaobeiTomlConfig {
     private static final String DISCOVERY_REDIS_URI = "discoveryRedisUri";
@@ -34,24 +33,40 @@ public final class GongdaobeiTomlConfig {
     private static final String DEFAULT_VERSION = "${gongdaobei.service.version:-1.0.0}";
     private static final long DEFAULT_AFFINITY_MILLIS = 1200000L;
 
-    public static final class VersionPattern {
+    public static final class VersionPattern implements Comparable<VersionPattern> {
         private final @Nullable Semver semver;
         private final String pattern;
 
-        @SuppressWarnings("deprecation")
-        public VersionPattern(String pattern) {
-            var versionString = StringUtils.removeStart(StrSubstitutor.replaceSystemProperties(pattern).strip(), "v");
+        public VersionPattern(String pattern, Function<? super String, String> substitutor) {
+            var versionString = substitutor.apply(pattern).strip();
+            if (versionString.startsWith("v")) {
+                versionString = versionString.substring(1);
+            }
             this.semver = versionString.isEmpty() ? null : new Semver(versionString);
             this.pattern = pattern;
         }
 
-        public Optional<Semver> toSemver() {
-            return Optional.ofNullable(this.semver);
+        public VersionPattern() {
+            this.semver = null;
+            this.pattern = "";
+        }
+
+        public VersionPattern resolve() {
+            return new VersionPattern(this.semver == null ? "" : this.semver.toString(), Function.identity());
         }
 
         @Override
         public String toString() {
             return this.pattern;
+        }
+
+        @Override
+        public int compareTo(@Nonnull VersionPattern that) {
+            if (this.semver == null || that.semver == null) {
+                return this.semver != null ? 1 : that.semver != null ? -1 : 0;
+            } else {
+                return this.semver.compareTo(that.semver);
+            }
         }
     }
 
@@ -102,7 +117,7 @@ public final class GongdaobeiTomlConfig {
             }
         }
 
-        public static Service load(Path configFile) {
+        public static Service load(Path configFile, Function<? super String, String> substitutor) {
             try (var input = Files.exists(configFile) ? Files.newBufferedReader(configFile) : Reader.nullReader()) {
                 var toml = new Toml().read(input);
                 var common = Optional.ofNullable(toml.getTable("common"));
@@ -117,7 +132,7 @@ public final class GongdaobeiTomlConfig {
                         HostAndPort.fromString(internalAddress).requireBracketsForIPv6(),
                         List.of(externalAddresses.stream().map(HostAndPort::fromString)
                                 .map(HostAndPort::requireBracketsForIPv6).toArray(HostAndPort[]::new)),
-                        isFallbackServer, new VersionPattern(version), affinityMillis);
+                        isFallbackServer, new VersionPattern(version, substitutor), affinityMillis);
             } catch (IOException | ClassCastException | SemverException e) {
                 throw new IllegalArgumentException(e);
             }

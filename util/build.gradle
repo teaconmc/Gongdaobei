@@ -23,7 +23,6 @@ dependencies {
     api 'com.moandjiezana.toml:toml4j:0.7.2'
     api 'io.lettuce:lettuce-core:6.2.4.RELEASE'
     implementation 'com.google.guava:guava:31.1-jre'
-    implementation 'org.apache.commons:commons-lang3:3.12.0'
 }
 
 artifacts {

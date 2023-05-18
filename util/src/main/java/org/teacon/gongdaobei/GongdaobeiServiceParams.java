@@ -1,20 +1,18 @@
 package org.teacon.gongdaobei;
 
 import com.google.common.net.HostAndPort;
-import com.vdurmont.semver4j.Semver;
-import org.apache.commons.lang3.StringUtils;
 
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 public final class GongdaobeiServiceParams {
     public final boolean isFallback;
     public final List<HostAndPort> externalAddresses;
     public final String motd;
-    public final Optional<Semver> version;
+    public final GongdaobeiTomlConfig.VersionPattern version;
     public final long affinityMillis;
     public final boolean isRetired;
     public final double tickMillis;
@@ -24,10 +22,10 @@ public final class GongdaobeiServiceParams {
     private GongdaobeiServiceParams(Map<String, String> serviceParams) {
         this.isFallback = Boolean.parseBoolean(serviceParams.getOrDefault("config:fallback", "false"));
         this.externalAddresses = List.of(Arrays
-                .stream(StringUtils.split(serviceParams.getOrDefault("config:external", "")))
+                .stream(serviceParams.getOrDefault("config:external", "").stripLeading().split("\\s+"))
                 .flatMap(s -> GongdaobeiUtil.getHostAndPort(s, "").stream()).toArray(HostAndPort[]::new));
         this.motd = serviceParams.getOrDefault("config:motd", "");
-        this.version = Optional.ofNullable(serviceParams.get("config:version")).flatMap(GongdaobeiUtil::getVersion);
+        this.version = new GongdaobeiTomlConfig.VersionPattern(serviceParams.getOrDefault("config:version", ""), Function.identity());
         this.affinityMillis = Long.parseUnsignedLong(serviceParams.getOrDefault("config:affinity", "0"));
         this.isRetired = !Boolean.parseBoolean(serviceParams.getOrDefault("status:register", "false"));
         this.tickMillis = Math.max(0.0, Double.parseDouble(serviceParams.getOrDefault("status:tick", "0")));
@@ -42,7 +40,7 @@ public final class GongdaobeiServiceParams {
         this.externalAddresses = List.of(config.externalAddresses()
                 .stream().map(h -> h.withDefaultPort(serverPort)).toArray(HostAndPort[]::new));
         this.motd = motd;
-        this.version = config.version().toSemver();
+        this.version = config.version().resolve();
         this.affinityMillis = config.affinityMillis();
         this.isRetired = isServerRetired;
         this.tickMillis = tickMillis;
@@ -60,7 +58,7 @@ public final class GongdaobeiServiceParams {
                 "config:external", this.externalAddresses.stream()
                         .map(HostAndPort::toString).collect(Collectors.joining("\t")),
                 "config:motd", this.motd,
-                "config:version", this.version.map(Semver::toString).orElse(""),
+                "config:version", this.version.toString(),
                 "config:affinity", Long.toUnsignedString(this.affinityMillis),
                 "status:register", Boolean.toString(!this.isRetired),
                 "status:tick", String.format("%.8f", this.tickMillis),

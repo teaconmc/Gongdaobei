@@ -15,6 +15,8 @@ import net.minecraftforge.fml.ModLoadingContext;
 import net.minecraftforge.fml.common.Mod;
 import net.minecraftforge.fml.loading.FMLPaths;
 import net.minecraftforge.network.NetworkConstants;
+import org.apache.commons.lang3.StringUtils;
+import org.apache.commons.lang3.text.StrSubstitutor;
 import org.slf4j.Logger;
 
 import java.io.Closeable;
@@ -37,16 +39,17 @@ public final class GongdaobeiForge {
         MinecraftForge.EVENT_BUS.addListener(this::onStopping);
     }
 
+    @SuppressWarnings("deprecation")
     private void onStarting(ServerStartingEvent event) {
         if (event.getServer() instanceof DedicatedServer server) {
             LOGGER.info("Loading from the configuration file ...");
             var confFile = FMLPaths.CONFIGDIR.get().resolve(Path.of("gongdaobei.toml"));
-            this.config = GongdaobeiTomlConfig.Service.load(confFile).save(confFile);
+            this.config = GongdaobeiTomlConfig.Service.load(confFile, StrSubstitutor::replaceSystemProperties).save(confFile);
             LOGGER.info("- Discovery Redis URI: {}", this.config.discoveryRedisUri().toURI());
             LOGGER.info("- Internal Address: {}", this.config.internalAddress());
             LOGGER.info("- External Addresses: {}", this.config.externalAddresses());
             LOGGER.info("- Is Fallback Server: {}", this.config.isFallbackServer() ? "TRUE" : "FALSE");
-            LOGGER.info("- Version: {} (resolved from {})", this.config.version().toSemver().orElse(null), this.config.version());
+            LOGGER.info("- Version: {} (resolved from {})", StringUtils.defaultIfEmpty(this.config.version().resolve().toString(), "undefined"), this.config.version());
             LOGGER.info("- Affinity Millis: {}", this.config.affinityMillis());
             this.handler = new Handler(server, this.config);
         }

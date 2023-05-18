@@ -2,7 +2,6 @@ package org.teacon.gongdaobei;
 
 import com.google.common.base.Preconditions;
 import com.google.common.net.HostAndPort;
-import com.vdurmont.semver4j.Semver;
 import io.lettuce.core.RedisClient;
 import io.lettuce.core.api.sync.RedisCommands;
 import io.lettuce.core.codec.StringCodec;
@@ -73,29 +72,27 @@ public final class GongdaobeiBungee extends Plugin {
 
         @Override
         public void run() {
-            var services = GongdaobeiUtil.getServiceParams(this.commands);
             var retiredServices = new LinkedHashSet<HostAndPort>();
+            var joiningServices = new LinkedHashSet<HostAndPort>();
+            var missingServices = new LinkedHashSet<HostAndPort>();
+            var services = GongdaobeiUtil.getServiceParams(this.commands);
             var newServiceParams = new LinkedHashMap<HostAndPort, GongdaobeiServiceParams>(services.size());
             for (var entry : services.entrySet()) {
                 var params = entry.getValue();
-                if (params.isRetired) {
-                    retiredServices.add(entry.getKey());
-                    continue;
-                }
                 var socket = InetSocketAddress.createUnresolved(entry.getKey().getHost(), entry.getKey().getPort());
                 this.cachedServerInfoMap.computeIfAbsent(entry.getKey(), k -> {
                     var serverName = "gongdaobei:" + entry.getKey();
                     return this.server.constructServerInfo(serverName, socket, params.motd, false);
                 });
                 newServiceParams.put(entry.getKey(), params);
+                (params.isRetired ? retiredServices : joiningServices).add(entry.getKey());
             }
             var oldServiceParams = this.serviceParams.getAndSet(Map.copyOf(newServiceParams));
-            var missingServices = new LinkedHashSet<HostAndPort>();
-            var joiningServices = newServiceParams.keySet();
-            for (var oldAddr : oldServiceParams.keySet()) {
-                var retired = retiredServices.contains(oldAddr);
-                var joining = joiningServices.remove(oldAddr);
-                if (!retired && !joining) {
+            for (var oldAddrEntry : oldServiceParams.entrySet()) {
+                var oldAddr = oldAddrEntry.getKey();
+                if (oldAddrEntry.getValue().isRetired) {
+                    retiredServices.remove(oldAddr);
+                } else if (!joiningServices.remove(oldAddr) && !retiredServices.contains(oldAddr)) {
                     missingServices.add(oldAddr);
                 }
             }
@@ -111,10 +108,10 @@ public final class GongdaobeiBungee extends Plugin {
         @EventHandler
         public void on(ServerDisconnectEvent event) {
             GongdaobeiUtil.getHostAndPort(event.getTarget().getName(), "gongdaobei:").ifPresent(addr -> {
-                var serviceParams = this.serviceParams.get();
-                if (serviceParams.containsKey(addr)) {
-                    var affinityMillis = serviceParams.get(addr).affinityMillis;
-                    GongdaobeiUtil.setAffinityTarget(event.getPlayer().getUniqueId(), addr, this.commands, affinityMillis);
+                var params = this.serviceParams.get().get(addr);
+                if (params != null && !params.isRetired) {
+                    var playerUniqueId = event.getPlayer().getUniqueId();
+                    GongdaobeiUtil.setAffinityTarget(playerUniqueId, addr, this.commands, params.affinityMillis);
                 }
             });
         }
@@ -124,37 +121,32 @@ public final class GongdaobeiBungee extends Plugin {
             var player = event.getPlayer();
             if (player != null && event.getReason() == ServerConnectEvent.Reason.JOIN_PROXY) {
                 // collect choices which have the latest versions
-                var latestTargetVersion = Optional.<Semver>empty();
-                var latestFallbackVersion = Optional.<Semver>empty();
+                var latestTargetVersion = new GongdaobeiTomlConfig.VersionPattern();
+                var latestFallbackVersion = new GongdaobeiTomlConfig.VersionPattern();
                 var targetChoicesByInternalAddr = new LinkedHashMap<HostAndPort, GongdaobeiServiceParams>();
                 var fallbackChoicesByInternalAddr = new LinkedHashMap<HostAndPort, GongdaobeiServiceParams>();
                 var playerExternalAddr = player.getPendingConnection().getVirtualHost();
                 for (var entry : this.serviceParams.get().entrySet()) {
                     var params = entry.getValue();
-                    var isTarget = params.externalAddresses.stream().map(a -> InetSocketAddress
-                            .createUnresolved(a.getHost(), a.getPort())).anyMatch(playerExternalAddr::equals);
-                    // noinspection DuplicatedCode
+                    var isTarget = !params.isRetired && params.externalAddresses.
+                            stream().map(addr -> InetSocketAddress.createUnresolved(
+                                    addr.getHost(), addr.getPort())).anyMatch(playerExternalAddr::equals);
                     if (isTarget) {
-                        if (params.version.isPresent() && (latestTargetVersion.isEmpty()
-                                || params.version.get().isGreaterThan(latestTargetVersion.get()))) {
+                        if (params.version.compareTo(latestTargetVersion) > 0) {
                             latestTargetVersion = params.version;
                             targetChoicesByInternalAddr.clear();
                         }
-                        if (params.version.isEmpty() ? latestTargetVersion.isEmpty()
-                                : latestTargetVersion.filter(params.version.get()::isEquivalentTo).isPresent()) {
+                        if (params.version.compareTo(latestTargetVersion) == 0) {
                             targetChoicesByInternalAddr.put(entry.getKey(), params);
                         }
                     }
-                    var isFallback = params.isFallback;
-                    // noinspection DuplicatedCode
+                    var isFallback = !params.isRetired && params.isFallback;
                     if (isFallback) {
-                        if (params.version.isPresent() && (latestFallbackVersion.isEmpty()
-                                || params.version.get().isGreaterThan(latestFallbackVersion.get()))) {
+                        if (params.version.compareTo(latestFallbackVersion) > 0) {
                             latestFallbackVersion = params.version;
                             fallbackChoicesByInternalAddr.clear();
                         }
-                        if (params.version.isEmpty() ? latestFallbackVersion.isEmpty()
-                                : latestFallbackVersion.filter(params.version.get()::isEquivalentTo).isPresent()) {
+                        if (params.version.compareTo(latestFallbackVersion) == 0) {
                             fallbackChoicesByInternalAddr.put(entry.getKey(), params);
                         }
                     }
@@ -203,10 +195,10 @@ public final class GongdaobeiBungee extends Plugin {
 
         @EventHandler
         public void on(ProxyPingEvent event) {
-            var serviceParams = this.serviceParams.get();
             var limit = this.server.getConfig().getPlayerLimit();
-            var online = serviceParams.values().stream().mapToInt(p -> p.onlinePlayers).sum();
-            var maximum = serviceParams.values().stream().mapToInt(p -> p.maximumPlayers).sum();
+            var serviceParams = this.serviceParams.get().values();
+            var online = serviceParams.stream().filter(p -> !p.isRetired).mapToInt(p -> p.onlinePlayers).sum();
+            var maximum = serviceParams.stream().filter(p -> !p.isRetired).mapToInt(p -> p.maximumPlayers).sum();
             event.getResponse().setPlayers(new ServerPing.Players(
                     limit > 0 ? Math.min(limit, maximum) : maximum, online, new ServerPing.PlayerInfo[0]));
         }
