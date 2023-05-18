@@ -2,7 +2,7 @@ package org.teacon.gongdaobei;
 
 import com.mojang.logging.LogUtils;
 import io.lettuce.core.RedisClient;
-import io.lettuce.core.api.sync.RedisCommands;
+import io.lettuce.core.api.StatefulRedisConnection;
 import io.lettuce.core.codec.StringCodec;
 import io.lettuce.core.masterreplica.MasterReplica;
 import net.minecraft.Util;
@@ -66,13 +66,24 @@ public final class GongdaobeiForge {
 
     private static class Handler implements Runnable, Closeable {
         private final RedisClient redisClient;
-        private final RedisCommands<String, String> commands;
+        private final CompletableFuture<? extends StatefulRedisConnection<String, String>> conn;
         private final DedicatedServer server;
         private final GongdaobeiTomlConfig.Service config;
 
         public Handler(DedicatedServer server, GongdaobeiTomlConfig.Service config) {
-            this.redisClient = Util.make(RedisClient.create(), c -> c.setOptions(GongdaobeiUtil.getRedisClientOptions()));
-            this.commands = MasterReplica.connect(this.redisClient, StringCodec.UTF8, config.discoveryRedisUri()).sync();
+            this.redisClient = Util.make(
+                    RedisClient.create(), c -> c.setOptions(GongdaobeiUtil.getRedisClientOptions()));
+            this.conn = MasterReplica.connectAsync(
+                    this.redisClient, StringCodec.UTF8, config.discoveryRedisUri()).whenComplete((c, e) -> {
+                var uri = config.discoveryRedisUri().toURI();
+                if (c != null) {
+                    LOGGER.info("Connected to the discovery redis server ({})", uri);
+                }
+                if (e != null) {
+                    LOGGER.error("Failed to connect to the discovery redis server ({}), " +
+                            "the server will run on offline mode and will not handle anything", uri, e);
+                }
+            });
             this.server = Util.make(server, s -> s.addTickable(this));
             this.config = config;
         }
@@ -96,7 +107,7 @@ public final class GongdaobeiForge {
                                 false, this.server.getMotd(), this.server.getPort(),
                                 this.twentyTicksAvgMillis(this.server.tickTimes, count),
                                 this.server.getPlayerCount(), this.server.getMaxPlayers()));
-                CompletableFuture.runAsync(() -> GongdaobeiUtil.setServiceParams(this.commands, params), Util.ioPool());
+                CompletableFuture.runAsync(() -> GongdaobeiUtil.setServiceParams(params, this.conn), Util.ioPool());
             }
         }
 
@@ -109,7 +120,7 @@ public final class GongdaobeiForge {
                             true, this.server.getMotd(), this.server.getPort(),
                             this.twentyTicksAvgMillis(this.server.tickTimes, count),
                             this.server.getPlayerCount(), this.server.getMaxPlayers()));
-            var future = CompletableFuture.runAsync(() -> GongdaobeiUtil.setServiceParams(this.commands, params), Util.ioPool());
+            var future = CompletableFuture.runAsync(() -> GongdaobeiUtil.setServiceParams(params, this.conn), Util.ioPool());
             future.thenRun(this.redisClient::close);
         }
     }

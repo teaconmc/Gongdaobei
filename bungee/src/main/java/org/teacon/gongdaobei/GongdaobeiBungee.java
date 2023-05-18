@@ -3,7 +3,7 @@ package org.teacon.gongdaobei;
 import com.google.common.base.Preconditions;
 import com.google.common.net.HostAndPort;
 import io.lettuce.core.RedisClient;
-import io.lettuce.core.api.sync.RedisCommands;
+import io.lettuce.core.api.StatefulRedisConnection;
 import io.lettuce.core.codec.StringCodec;
 import io.lettuce.core.masterreplica.MasterReplica;
 import net.md_5.bungee.api.ProxyServer;
@@ -21,10 +21,12 @@ import net.md_5.bungee.event.EventHandler;
 import java.io.Closeable;
 import java.net.InetSocketAddress;
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.logging.Level;
 import java.util.logging.Logger;
 import java.util.stream.IntStream;
 
@@ -56,7 +58,7 @@ public final class GongdaobeiBungee extends Plugin {
         private final ProxyServer server;
         private final RedisClient redisClient;
         private final ScheduledTask scheduledTask;
-        private final RedisCommands<String, String> commands;
+        private final CompletableFuture<? extends StatefulRedisConnection<String, String>> conn;
         private final ConcurrentMap<HostAndPort, ServerInfo> cachedServerInfoMap = new ConcurrentHashMap<>();
         private final AtomicReference<Map<HostAndPort, GongdaobeiServiceParams>> serviceParams = new AtomicReference<>(Map.of());
 
@@ -65,7 +67,17 @@ public final class GongdaobeiBungee extends Plugin {
             this.server = plugin.getProxy();
             this.redisClient = RedisClient.create();
             this.redisClient.setOptions(GongdaobeiUtil.getRedisClientOptions());
-            this.commands = MasterReplica.connect(this.redisClient, StringCodec.UTF8, config.discoveryRedisUri()).sync();
+            this.conn = MasterReplica.connectAsync(
+                    this.redisClient, StringCodec.UTF8, config.discoveryRedisUri()).whenComplete((c, e) -> {
+                var uri = config.discoveryRedisUri().toURI();
+                if (c != null) {
+                    this.logger.info("Connected to the discovery redis server (" + uri + ")");
+                }
+                if (e != null) {
+                    this.logger.log(Level.SEVERE, "Failed to connect to the discovery redis server (" +
+                            uri + "), the server will run on offline mode and will not handle anything", e);
+                }
+            });
             this.scheduledTask = this.server.getScheduler().schedule(plugin, this, 2500, 2500, TimeUnit.MILLISECONDS);
             this.server.getPluginManager().registerListener(plugin, this);
         }
@@ -75,7 +87,7 @@ public final class GongdaobeiBungee extends Plugin {
             var retiredServices = new LinkedHashSet<HostAndPort>();
             var joiningServices = new LinkedHashSet<HostAndPort>();
             var missingServices = new LinkedHashSet<HostAndPort>();
-            var services = GongdaobeiUtil.getServiceParams(this.commands);
+            var services = GongdaobeiUtil.getServiceParams(this.conn);
             var newServiceParams = new LinkedHashMap<HostAndPort, GongdaobeiServiceParams>(services.size());
             for (var entry : services.entrySet()) {
                 var params = entry.getValue();
@@ -111,7 +123,7 @@ public final class GongdaobeiBungee extends Plugin {
                 var params = this.serviceParams.get().get(addr);
                 if (params != null && !params.isRetired) {
                     var playerUniqueId = event.getPlayer().getUniqueId();
-                    GongdaobeiUtil.setAffinityTarget(playerUniqueId, addr, this.commands, params.affinityMillis);
+                    GongdaobeiUtil.setAffinityTarget(playerUniqueId, addr, this.conn, params.affinityMillis);
                 }
             });
         }
@@ -153,7 +165,7 @@ public final class GongdaobeiBungee extends Plugin {
                 }
                 // if there is an affinity host which has space, send the player to that server
                 var playerUniqueId = player.getUniqueId();
-                var affinityHost = GongdaobeiUtil.getAffinityTarget(playerUniqueId, this.commands);
+                var affinityHost = GongdaobeiUtil.getAffinityTarget(playerUniqueId, this.conn);
                 var affinityParams = affinityHost
                         .map(targetChoicesByInternalAddr::get)
                         .or(() -> affinityHost.map(fallbackChoicesByInternalAddr::get));
