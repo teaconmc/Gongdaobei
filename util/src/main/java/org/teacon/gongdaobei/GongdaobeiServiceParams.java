@@ -34,11 +34,10 @@ public final class GongdaobeiServiceParams {
     }
 
     public GongdaobeiServiceParams(GongdaobeiTomlConfig.Service config,
-                                   boolean isServerRetired, String motd, int serverPort,
+                                   boolean isServerRetired, String motd,
                                    double tickMillis, int onlinePlayers, int maximumPlayers) {
         this.isFallback = config.isFallbackServer();
-        this.externalAddresses = List.of(config.externalAddresses()
-                .stream().map(h -> h.withDefaultPort(serverPort)).toArray(HostAndPort[]::new));
+        this.externalAddresses = config.externalAddresses();
         this.motd = motd;
         this.version = config.version().resolve();
         this.affinityMillis = config.affinityMillis();

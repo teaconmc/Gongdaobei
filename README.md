@@ -25,7 +25,7 @@ discoveryRedisUri = "redis://localhost"
 # 如未指定端口，则以 server.properties 里的端口为准
 internalAddress = "localhost"
 # 外部地址，用于玩家通过特定域名连接服务器时识别
-# 如未指定端口，则以 server.properties 里的端口为准
+# 如未指定端口，则以玩家连接 bungee 侧使用的端口为准
 externalAddresses = []
 # 是否为 fallback 服务器
 # 如任何服务器外部地址均不满足玩家连接，玩家将选择一 fallback 服务器连接

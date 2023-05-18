@@ -140,9 +140,10 @@ public final class GongdaobeiBungee extends Plugin {
                 var playerExternalAddr = player.getPendingConnection().getVirtualHost();
                 for (var entry : this.serviceParams.get().entrySet()) {
                     var params = entry.getValue();
-                    var isTarget = !params.isRetired && params.externalAddresses.
-                            stream().map(addr -> InetSocketAddress.createUnresolved(
-                                    addr.getHost(), addr.getPort())).anyMatch(playerExternalAddr::equals);
+                    var isTarget = !params.isRetired && params.externalAddresses
+                            .stream().map(addr -> InetSocketAddress.createUnresolved(
+                                    addr.getHost(), addr.getPortOrDefault(playerExternalAddr.getPort())))
+                            .anyMatch(playerExternalAddr::equals);
                     if (isTarget) {
                         if (params.version.compareTo(latestTargetVersion) > 0) {
                             latestTargetVersion = params.version;

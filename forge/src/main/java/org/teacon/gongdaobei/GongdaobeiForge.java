@@ -103,8 +103,8 @@ public final class GongdaobeiForge {
             if ((count - 1) % 20 == 19) {
                 var params = Map.entry(
                         this.config.internalAddress().withDefaultPort(this.server.getPort()),
-                        new GongdaobeiServiceParams(this.config,
-                                false, this.server.getMotd(), this.server.getPort(),
+                        new GongdaobeiServiceParams(
+                                this.config, false, this.server.getMotd(),
                                 this.twentyTicksAvgMillis(this.server.tickTimes, count),
                                 this.server.getPlayerCount(), this.server.getMaxPlayers()));
                 CompletableFuture.runAsync(() -> GongdaobeiUtil.setServiceParams(params, this.conn), Util.ioPool());
@@ -116,8 +116,8 @@ public final class GongdaobeiForge {
             var count = this.server.getTickCount();
             var params = Map.entry(
                     this.config.internalAddress().withDefaultPort(this.server.getPort()),
-                    new GongdaobeiServiceParams(this.config,
-                            true, this.server.getMotd(), this.server.getPort(),
+                    new GongdaobeiServiceParams(
+                            this.config, true, this.server.getMotd(),
                             this.twentyTicksAvgMillis(this.server.tickTimes, count),
                             this.server.getPlayerCount(), this.server.getMaxPlayers()));
             var future = CompletableFuture.runAsync(() -> GongdaobeiUtil.setServiceParams(params, this.conn), Util.ioPool());
