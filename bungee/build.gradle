@@ -4,7 +4,7 @@ plugins {
 
 group = rootProject.group
 version = rootProject.version
-archivesBaseName = 'Gongdaobei-1.19-Bungee'
+archivesBaseName = 'Gongdaobei-Bungee-1.19'
 
 java.toolchain.languageVersion.set(JavaLanguageVersion.of(17))
 
@@ -26,6 +26,10 @@ processResources {
 dependencies {
     implementation project(path: ':util')
     compileOnly 'net.md-5:bungeecord-api:1.19-R0.1-SNAPSHOT'
+}
+
+jar {
+    archiveClassifier.set('pure')
 }
 
 artifacts {

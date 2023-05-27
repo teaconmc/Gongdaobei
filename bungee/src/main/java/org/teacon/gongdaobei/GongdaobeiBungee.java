@@ -41,7 +41,7 @@ public final class GongdaobeiBungee extends Plugin {
         var file = this.getDataFolder().toPath().resolve("gongdaobei.toml");
         this.getLogger().info("Loading from the configuration file ...");
         this.config = GongdaobeiTomlConfig.Common.load(file).save(file);
-        this.getLogger().info("- Discovery Redis URI: " + this.config.discoveryRedisUri().toURI());
+        this.getLogger().info("- Discovery Redis URI: " + this.config.discoveryRedisUri().getKey());
         this.handler = new Handler(this, this.config);
     }
 
@@ -69,8 +69,8 @@ public final class GongdaobeiBungee extends Plugin {
             this.redisClient = RedisClient.create();
             this.redisClient.setOptions(GongdaobeiUtil.getRedisClientOptions());
             this.conn = MasterReplica.connectAsync(
-                    this.redisClient, StringCodec.UTF8, config.discoveryRedisUri()).whenComplete((c, e) -> {
-                var uri = config.discoveryRedisUri().toURI();
+                    this.redisClient, StringCodec.UTF8, config.discoveryRedisUri().getValue()).whenComplete((c, e) -> {
+                var uri = config.discoveryRedisUri().getValue().toURI();
                 if (c != null) {
                     this.logger.info("Connected to the discovery redis server (" + uri + ")");
                 }

@@ -1,11 +1,12 @@
 package org.teacon.gongdaobei;
 
 import com.google.common.net.HostAndPort;
+import org.apache.commons.lang3.tuple.Pair;
+import org.apache.commons.text.lookup.StringLookupFactory;
 
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
-import java.util.function.Function;
 import java.util.stream.Collectors;
 
 public final class GongdaobeiServiceParams {
@@ -25,7 +26,8 @@ public final class GongdaobeiServiceParams {
                 .stream(serviceParams.getOrDefault("config:external", "").stripLeading().split("\\s+"))
                 .flatMap(s -> GongdaobeiUtil.getHostAndPort(s, "", false).stream()).toArray(HostAndPort[]::new));
         this.motd = serviceParams.getOrDefault("config:motd", "");
-        this.version = new GongdaobeiTomlConfig.VersionPattern(serviceParams.getOrDefault("config:version", ""), Function.identity());
+        this.version = new GongdaobeiTomlConfig.VersionPattern(
+                serviceParams.getOrDefault("config:version", ""), StringLookupFactory.INSTANCE.nullStringLookup());
         this.affinityMillis = Long.parseUnsignedLong(serviceParams.getOrDefault("config:affinity", "0"));
         this.isRetired = !Boolean.parseBoolean(serviceParams.getOrDefault("status:register", "false"));
         this.tickMillis = Math.max(0.0, Double.parseDouble(serviceParams.getOrDefault("status:tick", "0")));
@@ -37,7 +39,8 @@ public final class GongdaobeiServiceParams {
                                    boolean isServerRetired, String motd,
                                    double tickMillis, int onlinePlayers, int maximumPlayers) {
         this.isFallback = config.isFallbackServer();
-        this.externalAddresses = config.externalAddresses();
+        this.externalAddresses = List.of(config.externalAddresses()
+                .stream().map(Pair::getValue).toArray(HostAndPort[]::new));
         this.motd = motd;
         this.version = config.version().resolve();
         this.affinityMillis = config.affinityMillis();
@@ -54,8 +57,8 @@ public final class GongdaobeiServiceParams {
     public Map<String, String> toParams() {
         return Map.of(
                 "config:fallback", Boolean.toString(this.isFallback),
-                "config:external", this.externalAddresses.stream()
-                        .map(HostAndPort::toString).collect(Collectors.joining("\t")),
+                "config:external", this.externalAddresses
+                        .stream().map(HostAndPort::toString).collect(Collectors.joining("\t")),
                 "config:motd", this.motd,
                 "config:version", this.version.toString(),
                 "config:affinity", Long.toUnsignedString(this.affinityMillis),

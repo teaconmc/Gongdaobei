@@ -6,7 +6,7 @@ plugins {
 
 group = rootProject.group
 version = rootProject.version
-archivesBaseName = 'Gongdaobei-1.19-Forge'
+archivesBaseName = 'Gongdaobei-Forge-1.19'
 
 java.toolchain.languageVersion.set(JavaLanguageVersion.of(17))
 
@@ -81,7 +81,10 @@ dependencies {
     minecraft 'net.minecraftforge:forge:1.19.4-45.0.59'
 }
 
-jar.finalizedBy('reobfJar')
+jar {
+    archiveClassifier.set('pure')
+    finalizedBy('reobfJar')
+}
 
 artifacts {
     forgeJar jar

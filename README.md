@@ -8,7 +8,7 @@ Gongdaobei（公道杯）：BungeeCord 分服服务发现 & 负载均衡。
 
 ## 配置文件
 
-Forge 侧配置文件位于 `config/gongdaobei.toml`，Bungee 侧位于 `config/Gongdaobei/gongdaobei.toml`。
+Forge 侧配置文件位于 `config/gongdaobei.toml`，Bungee 侧位于 `plugins/Gongdaobei/gongdaobei.toml`。
 
 ```toml
 ################################
@@ -16,16 +16,19 @@ Forge 侧配置文件位于 `config/gongdaobei.toml`，Bungee 侧位于 `config/
 ################################
 [common]
 # 服务发现的 redis 地址，支持 sentinel 自动切换
-discoveryRedisUri = "redis://localhost"
+# 支持 Java System Properties 解析，可通过「:-」分隔符添加默认值
+discoveryRedisUri = "${gongdaobei.service.discovery:-redis://localhost:6379/0}"
 ################################
 # service 块配置为 forge 独有
 ################################
 [service]
 # 用于 bungee 层连接 forge 层的内部地址
 # 如未指定端口，则以 server.properties 里的端口为准
-internalAddress = "localhost"
+# 支持 Java System Properties 解析，可通过「:-」分隔符添加默认值
+internalAddress = "${gongdaobei.service.internal:-localhost}"
 # 外部地址，用于玩家通过特定域名连接服务器时识别
 # 如未指定端口，则以玩家连接 bungee 侧使用的端口为准
+# 支持 Java System Properties 解析，可通过「:-」分隔符添加默认值
 externalAddresses = []
 # 是否为 fallback 服务器
 # 如任何服务器外部地址均不满足玩家连接，玩家将选择一 fallback 服务器连接
