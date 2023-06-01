@@ -1,7 +1,6 @@
 package org.teacon.gongdaobei;
 
 import com.google.common.base.Preconditions;
-import com.google.common.collect.Sets;
 import com.google.common.net.HostAndPort;
 import io.lettuce.core.RedisClient;
 import io.lettuce.core.api.StatefulRedisConnection;
@@ -9,8 +8,11 @@ import io.lettuce.core.codec.StringCodec;
 import io.lettuce.core.masterreplica.MasterReplica;
 import net.md_5.bungee.api.ProxyServer;
 import net.md_5.bungee.api.ServerPing;
+import net.md_5.bungee.api.chat.BaseComponent;
+import net.md_5.bungee.api.chat.ComponentBuilder;
 import net.md_5.bungee.api.chat.TextComponent;
 import net.md_5.bungee.api.config.ServerInfo;
+import net.md_5.bungee.api.connection.PendingConnection;
 import net.md_5.bungee.api.event.ProxyPingEvent;
 import net.md_5.bungee.api.event.ServerConnectEvent;
 import net.md_5.bungee.api.event.ServerDisconnectEvent;
@@ -54,11 +56,68 @@ public final class GongdaobeiBungee extends Plugin {
         this.handler.close();
     }
 
+
+    public record ServerEntry(boolean isTarget,
+                              boolean isFallback,
+                              HostAndPort internalAddress,
+                              GongdaobeiServiceParams serviceParams) {
+        public static List<ServerEntry> from(PendingConnection connection,
+                                             Map<HostAndPort, GongdaobeiServiceParams> serviceParams) {
+            var playerExternalAddr = connection.getVirtualHost();
+            var targetChoicesByInternal = new HashSet<HostAndPort>();
+            var fallbackChoicesByInternal = new HashSet<HostAndPort>();
+            var latestTargetVersion = new GongdaobeiTomlConfig.VersionPattern();
+            var latestFallbackVersion = new GongdaobeiTomlConfig.VersionPattern();
+            for (var entry : serviceParams.entrySet()) {
+                var params = entry.getValue();
+                var isTarget = !params.isRetired && params.externalAddresses.stream()
+                        .filter(addr -> addr.getHost().equals(playerExternalAddr.getHostString()))
+                        .anyMatch(addr -> !addr.hasPort() || addr.getPort() == playerExternalAddr.getPort());
+                if (isTarget) {
+                    if (params.version.compareTo(latestTargetVersion) > 0) {
+                        latestTargetVersion = params.version;
+                        targetChoicesByInternal.clear();
+                    }
+                    if (params.version.compareTo(latestTargetVersion) == 0) {
+                        targetChoicesByInternal.add(entry.getKey());
+                    }
+                }
+                var isFallback = !params.isRetired && params.isFallback;
+                if (isFallback) {
+                    if (params.version.compareTo(latestFallbackVersion) > 0) {
+                        latestFallbackVersion = params.version;
+                        fallbackChoicesByInternal.clear();
+                    }
+                    if (params.version.compareTo(latestFallbackVersion) == 0) {
+                        fallbackChoicesByInternal.add(entry.getKey());
+                    }
+                }
+            }
+            var result = new ArrayList<ServerEntry>(serviceParams.size());
+            for (var entry : serviceParams.entrySet()) {
+                var isTargetServer = targetChoicesByInternal.contains(entry.getKey());
+                var isFallbackServer = fallbackChoicesByInternal.contains(entry.getKey());
+                if (isTargetServer || isFallbackServer) {
+                    result.add(new ServerEntry(isTargetServer, isFallbackServer, entry.getKey(), entry.getValue()));
+                }
+            }
+            return List.copyOf(result);
+        }
+
+        @Override
+        public String toString() {
+            return this.internalAddress +
+                    " (target: " + (this.isTarget ? "TRUE" : "FALSE") +
+                    ", fallback: " + (this.isFallback ? "TRUE" : "FALSE") + ")";
+        }
+    }
+
     public static final class Handler implements Runnable, Listener, Closeable {
         private final Logger logger;
         private final ProxyServer server;
         private final RedisClient redisClient;
         private final ScheduledTask scheduledTask;
+        private final Random randomGenerator = new Random();
         private final CompletableFuture<? extends StatefulRedisConnection<String, String>> conn;
         private final ConcurrentMap<HostAndPort, ServerInfo> cachedServerInfoMap = new ConcurrentHashMap<>();
         private final AtomicReference<Map<HostAndPort, GongdaobeiServiceParams>> serviceParams = new AtomicReference<>(Map.of());
@@ -133,72 +192,45 @@ public final class GongdaobeiBungee extends Plugin {
         public void on(ServerConnectEvent event) {
             var player = event.getPlayer();
             if (player != null && event.getReason() == ServerConnectEvent.Reason.JOIN_PROXY) {
-                // collect choices which have the latest versions
-                var latestTargetVersion = new GongdaobeiTomlConfig.VersionPattern();
-                var latestFallbackVersion = new GongdaobeiTomlConfig.VersionPattern();
-                var targetChoicesByInternalAddr = new LinkedHashMap<HostAndPort, GongdaobeiServiceParams>();
-                var fallbackChoicesByInternalAddr = new LinkedHashMap<HostAndPort, GongdaobeiServiceParams>();
-                var playerExternalAddr = player.getPendingConnection().getVirtualHost();
-                for (var entry : this.serviceParams.get().entrySet()) {
-                    var params = entry.getValue();
-                    var isTarget = !params.isRetired && params.externalAddresses.stream()
-                            .filter(addr -> addr.getHost().equals(playerExternalAddr.getHostString()))
-                            .anyMatch(addr -> !addr.hasPort() || addr.getPort() == playerExternalAddr.getPort());
-                    if (isTarget) {
-                        if (params.version.compareTo(latestTargetVersion) > 0) {
-                            latestTargetVersion = params.version;
-                            targetChoicesByInternalAddr.clear();
-                        }
-                        if (params.version.compareTo(latestTargetVersion) == 0) {
-                            targetChoicesByInternalAddr.put(entry.getKey(), params);
-                        }
-                    }
-                    var isFallback = !params.isRetired && params.isFallback;
-                    if (isFallback) {
-                        if (params.version.compareTo(latestFallbackVersion) > 0) {
-                            latestFallbackVersion = params.version;
-                            fallbackChoicesByInternalAddr.clear();
-                        }
-                        if (params.version.compareTo(latestFallbackVersion) == 0) {
-                            fallbackChoicesByInternalAddr.put(entry.getKey(), params);
-                        }
-                    }
-                }
+                var playerChoices = ServerEntry.from(player.getPendingConnection(), this.serviceParams.get());
                 // if there is an affinity host which has space, send the player to that server
                 var playerUniqueId = player.getUniqueId();
                 var affinityHost = GongdaobeiUtil.getAffinityTarget(playerUniqueId, this.conn);
-                var affinityParams = affinityHost
-                        .map(targetChoicesByInternalAddr::get)
-                        .or(() -> affinityHost.map(fallbackChoicesByInternalAddr::get));
+                var affinityParams = playerChoices.stream()
+                        .filter(e -> affinityHost.filter(e.internalAddress()::equals).isPresent()).findFirst();
                 if (affinityParams.isPresent()) {
-                    var online = affinityParams.get().onlinePlayers;
-                    var maximum = affinityParams.get().maximumPlayers;
+                    var online = affinityParams.get().serviceParams().onlinePlayers;
+                    var maximum = affinityParams.get().serviceParams().maximumPlayers;
                     if (online < maximum) {
                         this.logger.info("Affinity server found, send the player to the " +
-                                "affinity server (" + affinityHost.get() + ", choices: " + Sets.union(
-                                targetChoicesByInternalAddr.keySet(), fallbackChoicesByInternalAddr.keySet()) + ")");
+                                "affinity server (" + affinityHost.get() + ", choices: " + playerChoices + ")");
                         event.setTarget(this.cachedServerInfoMap.get(affinityHost.get()));
                         return;
                     }
                 }
                 // weighted random choices
-                for (var isFallback : List.of(false, true)) {
-                    var choices = isFallback ? fallbackChoicesByInternalAddr : targetChoicesByInternalAddr;
-                    var online = choices.values().stream().mapToInt(p -> p.onlinePlayers).toArray();
-                    var maximum = choices.values().stream().mapToInt(p -> p.maximumPlayers).toArray();
-                    var maxSpaceRatio = IntStream.range(0, choices.size()).mapToDouble(i ->
+                for (var fallback : List.of(false, true)) {
+                    var online = playerChoices.stream()
+                            .filter(e -> fallback ? e.isFallback() : e.isTarget())
+                            .mapToInt(e -> e.serviceParams().onlinePlayers).toArray();
+                    var maximum = playerChoices.stream()
+                            .filter(e -> fallback ? e.isFallback() : e.isTarget())
+                            .mapToInt(e -> e.serviceParams().maximumPlayers).toArray();
+                    var highestOccupancyRate = IntStream.range(0, online.length).mapToDouble(i ->
                             online[i] < maximum[i] ? (online[i] + 1.0) / maximum[i] : 1.0).max().orElse(0.0);
-                    var weights = IntStream.range(0, choices.size()).mapToDouble(i ->
-                            Math.max(0.0, maximum[i] * maxSpaceRatio - online[i])).toArray();
-                    var random = Math.random() * Arrays.stream(weights).sum();
-                    var iterator = choices.keySet().iterator();
-                    for (var i = 0; i < choices.size(); ++i) {
+                    var weights = IntStream.range(0, maximum.length).mapToDouble(i ->
+                            Math.max(0.0, maximum[i] * highestOccupancyRate - online[i])).toArray();
+                    var random = this.randomGenerator.nextDouble() *
+                            Arrays.stream(weights).map(w -> w * w).sum();
+                    var iterator = playerChoices.stream()
+                            .filter(e -> fallback ? e.isFallback() : e.isTarget()).iterator();
+                    for (var i = 0; i < online.length; ++i) {
                         var next = iterator.next();
                         random -= weights[i];
                         if (random < 0.0) {
-                            this.logger.info("Load balancing performed, send the player to the " + (isFallback
-                                    ? "fallback" : "target") + " server (" + next + ", choices: " + choices.keySet() + ")");
-                            event.setTarget(this.cachedServerInfoMap.get(next));
+                            this.logger.info("Load balancing performed, send the player to the " + (fallback ?
+                                    "fallback" : "target") + " server (" + next + ", choices: " + playerChoices + ")");
+                            event.setTarget(this.cachedServerInfoMap.get(next.internalAddress()));
                             return;
                         }
                     }
@@ -213,11 +245,15 @@ public final class GongdaobeiBungee extends Plugin {
         @EventHandler
         public void on(ProxyPingEvent event) {
             var limit = this.server.getConfig().getPlayerLimit();
-            var serviceParams = this.serviceParams.get().values();
-            var online = serviceParams.stream().filter(p -> !p.isRetired).mapToInt(p -> p.onlinePlayers).sum();
-            var maximum = serviceParams.stream().filter(p -> !p.isRetired).mapToInt(p -> p.maximumPlayers).sum();
-            event.getResponse().setPlayers(new ServerPing.Players(
-                    limit > 0 ? Math.min(limit, maximum) : maximum, online, new ServerPing.PlayerInfo[0]));
+            var playerChoices = ServerEntry.from(event.getConnection(), this.serviceParams.get());
+            var online = playerChoices.stream().mapToInt(p -> p.serviceParams().onlinePlayers).sum();
+            var maximum = playerChoices.stream().mapToInt(p -> p.serviceParams().maximumPlayers).sum();
+            if (!playerChoices.isEmpty()) {
+                var motd = playerChoices.get(this.randomGenerator.nextInt(playerChoices.size())).serviceParams().motd;
+                event.getResponse().setDescriptionComponent(new TextComponent(TextComponent.fromLegacyText(motd)));
+            }
+            var maxWithLimit = limit > 0 ? Math.min(limit, maximum) : maximum;
+            event.getResponse().setPlayers(new ServerPing.Players(maxWithLimit, online, new ServerPing.PlayerInfo[0]));
         }
 
         @Override
