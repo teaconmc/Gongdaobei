@@ -91,11 +91,12 @@ public final class GongdaobeiBungee extends Plugin {
                     }
                 }
             }
+            var hasTargetServer = !targetChoicesByInternal.isEmpty();
             var result = new ArrayList<ServerEntry>(serviceParams.size());
             for (var entry : serviceParams.entrySet()) {
                 var isTargetServer = targetChoicesByInternal.contains(entry.getKey());
                 var isFallbackServer = fallbackChoicesByInternal.contains(entry.getKey());
-                if (isTargetServer || isFallbackServer) {
+                if (hasTargetServer ? isTargetServer : isFallbackServer) {
                     result.add(new ServerEntry(isTargetServer, isFallbackServer, entry.getKey(), entry.getValue()));
                 }
             }
@@ -207,32 +208,24 @@ public final class GongdaobeiBungee extends Plugin {
                     }
                 }
                 // weighted random choices
-                for (var fallback : List.of(false, true)) {
-                    var online = playerChoices.stream()
-                            .filter(e -> fallback ? e.isFallback() : e.isTarget())
-                            .mapToInt(e -> e.serviceParams().onlinePlayers).toArray();
-                    var maximum = playerChoices.stream()
-                            .filter(e -> fallback ? e.isFallback() : e.isTarget())
-                            .mapToInt(e -> e.serviceParams().maximumPlayers).toArray();
-                    var occupancyRateSummary = IntStream.range(0, online.length).mapToDouble(i ->
-                            maximum[i] > 0 ? (online[i] + 1.0) / maximum[i] : 1.0).summaryStatistics();
-                    var highestOccupancyRate = occupancyRateSummary.getMin() > 1.0 ?
-                            occupancyRateSummary.getMax() : Math.min(occupancyRateSummary.getMax(), 1.0);
-                    var weights = IntStream.range(0, maximum.length).mapToDouble(i ->
-                            Math.max(0.0, maximum[i] * highestOccupancyRate - online[i])).toArray();
-                    var random = this.randomGenerator.nextDouble() *
-                            Arrays.stream(weights).map(w -> w * w).sum();
-                    var iterator = playerChoices.stream()
-                            .filter(e -> fallback ? e.isFallback() : e.isTarget()).iterator();
-                    for (var i = 0; i < online.length; ++i) {
-                        var next = iterator.next();
-                        random -= weights[i];
-                        if (random < 0.0) {
-                            this.logger.info("Load balancing performed, send the player to the " + (fallback ?
-                                    "fallback" : "target") + " server (" + next + ", choices: " + playerChoices + ")");
-                            event.setTarget(this.cachedServerInfoMap.get(next.internalAddress()));
-                            return;
-                        }
+                var online = playerChoices.stream().mapToInt(e -> e.serviceParams().onlinePlayers).toArray();
+                var maximum = playerChoices.stream().mapToInt(e -> e.serviceParams().maximumPlayers).toArray();
+                var occupancyRateSummary = IntStream.range(0, online.length).mapToDouble(i ->
+                        maximum[i] > 0 ? (online[i] + 1.0) / maximum[i] : 1.0).summaryStatistics();
+                var highestOccupancyRate = occupancyRateSummary.getMin() > 1.0 ?
+                        occupancyRateSummary.getMax() : Math.min(occupancyRateSummary.getMax(), 1.0);
+                var weights = IntStream.range(0, maximum.length).mapToDouble(i ->
+                        Math.max(0.0, maximum[i] * highestOccupancyRate - online[i])).toArray();
+                var random = this.randomGenerator.nextDouble() * Arrays.stream(weights).map(w -> w * w).sum();
+                var iterator = playerChoices.stream().iterator();
+                for (var i = 0; i < online.length; ++i) {
+                    var next = iterator.next();
+                    random -= weights[i];
+                    if (random < 0.0) {
+                        this.logger.info("Load balancing performed, send the player to the target or " +
+                                "fallback server (" + next.internalAddress() + ", choices: " + playerChoices + ")");
+                        event.setTarget(this.cachedServerInfoMap.get(next.internalAddress()));
+                        return;
                     }
                 }
                 // if there is no choice (such that all the choices are full), disconnect
