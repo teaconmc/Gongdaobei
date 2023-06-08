@@ -1,5 +1,6 @@
 plugins {
     id 'java'
+    id 'maven-publish'
     id 'com.github.johnrengelman.shadow' version '7.1.2'
 }
 
@@ -63,4 +64,50 @@ jar.enabled = false
 
 artifacts {
     archives shadowJar
+}
+
+publishing {
+    publications {
+        release(MavenPublication) {
+            artifactId = "Gongdaobei-Universal-1.20"
+            artifact shadowJar
+            pom {
+                name = "Gongdaobei Universal 1.20"
+                description = "Gongdaobei: Service discovery and registration"
+                licenses {
+                    license {
+                        name = "LGPL-3.0"
+                        url = "https://www.gnu.org/licenses/lgpl-3.0.html"
+                    }
+                }
+                developers {
+                    developer {
+                        id = "TeaConMC"
+                        name = "TeaConMC"
+                    }
+                }
+            }
+        }
+    }
+    repositories {
+        maven {
+            name = "TeaConOSS"
+            url = "s3://maven/"
+            credentials(AwsCredentials) {
+                accessKey = System.env.TEACON_ARCHIVE_ACCESS_KEY
+                secretKey = System.env.TEACON_ARCHIVE_ACCESS_SECRET
+            }
+        }
+        maven {
+            name = "TeaConGitea"
+            url = "https://git.teacon.cn/api/packages/teaconmc/maven"
+            credentials(HttpHeaderCredentials) {
+                name = "Authorization"
+                value = "token " + System.getenv("GITEA_TOKEN")
+            }
+            authentication {
+                header(HttpHeaderAuthentication)
+            }
+        }
+    }
 }

@@ -1,0 +1,69 @@
+kind: pipeline
+type: docker
+name: publish
+
+trigger:
+  event: [tag]
+  ref: ["refs/tags/**"]
+
+steps:
+- name: restore-gradle-cache
+  image: drillster/drone-volume-cache
+  pull: if-not-exists
+  settings:
+    restore: true
+    mount:
+    - /root/.gradle
+  volumes:
+  - name: cache
+    path: /cache
+  - name: gradle-cache
+    path: /root/.gradle
+
+- name: publish
+  image: azul/zulu-openjdk-alpine:17
+  environment:
+    GITEA_TOKEN:
+      from_secret: gitea_token
+    TEACON_ARCHIVE_ACCESS_KEY:
+      from_secret: archive_access_key
+    TEACON_ARCHIVE_ACCESS_SECRET:
+      from_secret: archive_access_secret
+  commands:
+  - >
+    ./gradlew
+    -Dorg.gradle.s3.endpoint=https://teacon2021.oss-accelerate.aliyuncs.com
+    publishReleasePublicationToTeaConOSSRepository
+    publishReleasePublicationToTeaConGiteaRepository
+    --no-daemon
+  volumes:
+  - name: gradle-cache
+    path: /root/.gradle
+  depends_on:
+  - restore-gradle-cache
+
+- name: rebuild-gradle-cache
+  image: drillster/drone-volume-cache
+  pull: if-not-exists
+  settings:
+    rebuild: true
+    mount:
+    - /root/.gradle
+  volumes:
+  - name: cache
+    path: /cache
+  - name: gradle-cache
+    path: /root/.gradle
+  depends_on:
+  - build-nightly
+  - publish
+
+volumes:
+- name: cache
+  host:
+    path: /var/lib/drone-runner/cache
+- name: gradle-cache
+  temp: {}
+
+node:
+  mainland: "false"
