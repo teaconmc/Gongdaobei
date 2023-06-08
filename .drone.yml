@@ -26,9 +26,9 @@ steps:
     GITEA_TOKEN:
       from_secret: gitea_token
     TEACON_ARCHIVE_ACCESS_KEY:
-      from_secret: archive_access_key
+      from_secret: oss_key_id
     TEACON_ARCHIVE_ACCESS_SECRET:
-      from_secret: archive_access_secret
+      from_secret: oss_key_secret
   commands:
   - >
     ./gradlew
