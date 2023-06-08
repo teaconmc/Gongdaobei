@@ -37,6 +37,9 @@ shadowJar {
         it.exclude it.dependency('io.netty:.*')
         it.exclude it.dependency('com.google.code.gson:.*')
     }
+    from('LICENSE') {
+        into 'META-INF'
+    }
     manifest {
         attributes([
                 "Specification-Title"     : "Gongdaobei",
