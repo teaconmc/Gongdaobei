@@ -55,7 +55,6 @@ steps:
   - name: gradle-cache
     path: /root/.gradle
   depends_on:
-  - build-nightly
   - publish
 
 volumes:
