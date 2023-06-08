@@ -3,9 +3,9 @@ plugins {
     id 'com.github.johnrengelman.shadow' version '7.1.2'
 }
 
-version = '1.0.0'
+version = '1.1.0'
 group = 'org.teacon'
-archivesBaseName = 'Gongdaobei-Universal-1.19'
+archivesBaseName = 'Gongdaobei-Universal-1.20'
 
 java.toolchain.languageVersion.set(JavaLanguageVersion.of(17))
 
