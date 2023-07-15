@@ -19,6 +19,8 @@ package org.teacon.gongdaobei;
 
 import com.google.common.base.Preconditions;
 import com.google.common.net.HostAndPort;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonPrimitive;
 import io.lettuce.core.RedisClient;
 import io.lettuce.core.api.StatefulRedisConnection;
 import io.lettuce.core.codec.StringCodec;
@@ -36,7 +38,10 @@ import net.md_5.bungee.api.plugin.Plugin;
 import net.md_5.bungee.api.scheduler.ScheduledTask;
 import net.md_5.bungee.event.EventHandler;
 
+import javax.annotation.Nullable;
 import java.io.Closeable;
+import java.lang.invoke.MethodHandle;
+import java.lang.invoke.MethodHandles;
 import java.net.InetSocketAddress;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
@@ -129,6 +134,22 @@ public final class GongdaobeiBungee extends Plugin {
     }
 
     public static final class Handler implements Runnable, Listener, Closeable {
+        private static final @Nullable MethodHandle SET_FORGE_DATA;
+
+        static {
+            var methodSerForgeData = (MethodHandle) null;
+            try {
+                // noinspection JavaReflectionMemberAccess
+                var field = ServerPing.class.getDeclaredField("forgeData");
+                field.setAccessible(true);
+                var lookup = MethodHandles.lookup();
+                methodSerForgeData = lookup.unreflectSetter(field);
+            } catch (NoSuchFieldException | IllegalAccessException e) {
+                // do nothing here
+            }
+            SET_FORGE_DATA = methodSerForgeData;
+        }
+
         private final Logger logger;
         private final ProxyServer server;
         private final RedisClient redisClient;
@@ -258,9 +279,21 @@ public final class GongdaobeiBungee extends Plugin {
             var playerChoices = ServerEntry.from(event.getConnection(), this.serviceParams.get());
             var online = playerChoices.stream().mapToInt(p -> p.serviceParams().onlinePlayers).sum();
             var maximum = playerChoices.stream().mapToInt(p -> p.serviceParams().maximumPlayers).sum();
+            var pingForgeData = this.getDefaultPingForgeData();
             if (!playerChoices.isEmpty()) {
-                var motd = playerChoices.get(this.randomGenerator.nextInt(playerChoices.size())).serviceParams().motd;
-                event.getResponse().setDescriptionComponent(new TextComponent(TextComponent.fromLegacyText(motd)));
+                var random = playerChoices.get(this.randomGenerator.nextInt(playerChoices.size())).serviceParams();
+                if (random.pingForgeData instanceof JsonObject randomPingForgeData) {
+                    randomPingForgeData.asMap().forEach(pingForgeData::add);
+                }
+                var motd = new TextComponent(TextComponent.fromLegacyText(random.motd));
+                event.getResponse().setDescriptionComponent(motd);
+            }
+            if (SET_FORGE_DATA != null) {
+                try {
+                    SET_FORGE_DATA.invokeExact(event.getResponse(), pingForgeData);
+                } catch (Throwable e) {
+                    throw new RuntimeException(e);
+                }
             }
             var maxWithLimit = limit > 0 ? Math.min(limit, maximum) : maximum;
             event.getResponse().setPlayers(new ServerPing.Players(maxWithLimit, online, new ServerPing.PlayerInfo[0]));
@@ -271,6 +304,13 @@ public final class GongdaobeiBungee extends Plugin {
             this.server.getPluginManager().unregisterListener(this);
             this.scheduledTask.cancel();
             this.redisClient.close();
+        }
+
+        private JsonObject getDefaultPingForgeData() {
+            var pingForgeData = new JsonObject();
+            // modern forge: { "fmlNetworkVersion": 3 }
+            pingForgeData.add("fmlNetworkVersion", new JsonPrimitive(3));
+            return pingForgeData;
         }
     }
 }

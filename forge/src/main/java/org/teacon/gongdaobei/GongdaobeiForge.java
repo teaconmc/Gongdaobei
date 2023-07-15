@@ -17,7 +17,9 @@
  */
 package org.teacon.gongdaobei;
 
+import com.google.gson.JsonNull;
 import com.mojang.logging.LogUtils;
+import com.mojang.serialization.JsonOps;
 import io.lettuce.core.RedisClient;
 import io.lettuce.core.api.StatefulRedisConnection;
 import io.lettuce.core.codec.StringCodec;
@@ -32,6 +34,7 @@ import net.minecraftforge.fml.ModLoadingContext;
 import net.minecraftforge.fml.common.Mod;
 import net.minecraftforge.fml.loading.FMLPaths;
 import net.minecraftforge.network.NetworkConstants;
+import net.minecraftforge.network.ServerStatusPing;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.lang3.tuple.Pair;
 import org.slf4j.Logger;
@@ -123,12 +126,14 @@ public final class GongdaobeiForge {
         public void run() {
             var count = this.server.getTickCount();
             if ((count - 1) % 20 == 19) {
+                var pingForgeData = ServerStatusPing.CODEC.encodeStart(
+                        JsonOps.INSTANCE, new ServerStatusPing()).result().orElse(JsonNull.INSTANCE);
                 var params = Map.entry(
                         this.config.internalAddress().getValue().withDefaultPort(this.server.getPort()),
                         new GongdaobeiServiceParams(
                                 this.config, false, this.server.getMotd(),
                                 this.twentyTicksAvgMillis(this.server.tickTimes, count),
-                                this.server.getPlayerCount(), this.server.getMaxPlayers()));
+                                this.server.getPlayerCount(), this.server.getMaxPlayers(), pingForgeData));
                 CompletableFuture.runAsync(() -> GongdaobeiUtil.setServiceParams(params, this.conn), Util.ioPool());
             }
         }
@@ -141,7 +146,7 @@ public final class GongdaobeiForge {
                     new GongdaobeiServiceParams(
                             this.config, true, this.server.getMotd(),
                             this.twentyTicksAvgMillis(this.server.tickTimes, count),
-                            this.server.getPlayerCount(), this.server.getMaxPlayers()));
+                            this.server.getPlayerCount(), this.server.getMaxPlayers(), JsonNull.INSTANCE));
             var future = CompletableFuture.runAsync(() -> GongdaobeiUtil.setServiceParams(params, this.conn), Util.ioPool());
             future.thenRun(this.redisClient::close);
         }

@@ -18,6 +18,9 @@
 package org.teacon.gongdaobei;
 
 import com.google.common.net.HostAndPort;
+import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
+import com.google.gson.JsonElement;
 import org.apache.commons.lang3.tuple.Pair;
 import org.apache.commons.text.lookup.StringLookupFactory;
 
@@ -27,6 +30,8 @@ import java.util.Map;
 import java.util.stream.Collectors;
 
 public final class GongdaobeiServiceParams {
+    private static final Gson GSON = new GsonBuilder().create();
+
     public final boolean isFallback;
     public final List<HostAndPort> externalAddresses;
     public final String motd;
@@ -36,6 +41,7 @@ public final class GongdaobeiServiceParams {
     public final double tickMillis;
     public final int onlinePlayers;
     public final int maximumPlayers;
+    public final JsonElement pingForgeData;
 
     private GongdaobeiServiceParams(Map<String, String> serviceParams) {
         this.isFallback = Boolean.parseBoolean(serviceParams.getOrDefault("config:fallback", "false"));
@@ -50,11 +56,12 @@ public final class GongdaobeiServiceParams {
         this.tickMillis = Math.max(0.0, Double.parseDouble(serviceParams.getOrDefault("status:tick", "0")));
         this.onlinePlayers = Integer.parseUnsignedInt(serviceParams.getOrDefault("status:online", "0"));
         this.maximumPlayers = Integer.parseUnsignedInt(serviceParams.getOrDefault("status:maximum", "0"));
+        this.pingForgeData = GSON.fromJson(serviceParams.getOrDefault("status:forgedata", "{}"), JsonElement.class);
     }
 
     public GongdaobeiServiceParams(GongdaobeiTomlConfig.Service config,
                                    boolean isServerRetired, String motd,
-                                   double tickMillis, int onlinePlayers, int maximumPlayers) {
+                                   double tickMillis, int onlinePlayers, int maximumPlayers, JsonElement pingForgeData) {
         this.isFallback = config.isFallbackServer();
         this.externalAddresses = List.of(config.externalAddresses()
                 .stream().map(Pair::getValue).toArray(HostAndPort[]::new));
@@ -65,6 +72,7 @@ public final class GongdaobeiServiceParams {
         this.tickMillis = tickMillis;
         this.onlinePlayers = onlinePlayers;
         this.maximumPlayers = maximumPlayers;
+        this.pingForgeData = pingForgeData;
     }
 
     public static GongdaobeiServiceParams fromParams(Map<String, String> serviceParams) {
@@ -82,6 +90,7 @@ public final class GongdaobeiServiceParams {
                 "status:register", Boolean.toString(!this.isRetired),
                 "status:tick", String.format("%.8f", this.tickMillis),
                 "status:online", Integer.toUnsignedString(this.onlinePlayers),
-                "status:maximum", Integer.toUnsignedString(this.maximumPlayers));
+                "status:maximum", Integer.toUnsignedString(this.maximumPlayers),
+                "status:forgedata", GSON.toJson(this.pingForgeData));
     }
 }
