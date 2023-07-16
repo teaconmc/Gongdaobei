@@ -157,7 +157,7 @@ public final class GongdaobeiBungee extends Plugin {
             var playerExternalHost = playerExternalAddr == null ? null : playerExternalAddr.getHostString();
             return from(params -> params.externalAddresses.stream()
                     .filter(addr -> addr.getHost().equals(playerExternalHost))
-                    .anyMatch(addr -> addr.getPortOrDefault(-1) == playerExternalPort), params -> true, serviceParams);
+                    .anyMatch(addr -> !addr.hasPort() || addr.getPort() == playerExternalPort), params -> true, serviceParams);
         }
 
         @Override
