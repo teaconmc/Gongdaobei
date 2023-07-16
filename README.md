@@ -43,4 +43,11 @@ version = "${gongdaobei.service.version:-1.0.0}"
 # 亲和有效时间，单位毫秒
 # 玩家在亲和有效时间内的重连时，将分配到上一个连接的服务器
 affinityMillis = 1200000
+################################
+# bungee 块配置为 bungee 独有
+################################
+[bungee]
+# Bungee 侧开启的 Prometheus Metrics 服务器端口
+# 应当为 0 和 65535 之间，如果为 0 则不开启服务器
+prometheusServerPort = 0
 ```
