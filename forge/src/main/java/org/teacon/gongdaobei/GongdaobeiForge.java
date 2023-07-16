@@ -65,7 +65,7 @@ public final class GongdaobeiForge {
             var confFile = FMLPaths.CONFIGDIR.get().resolve(Path.of("gongdaobei.toml"));
             this.config = GongdaobeiTomlConfig.Service.load(confFile).save(confFile);
             LOGGER.info("- Discovery Redis URI: {} (resolved from {})",
-                    this.config.discoveryRedisUri().getValue().toURI(), this.config.discoveryRedisUri().getKey());
+                    GongdaobeiUtil.desensitizeRedisUri(this.config.discoveryRedisUri().getValue()), this.config.discoveryRedisUri().getKey());
             LOGGER.info("- Internal Address: {} (resolved from {})",
                     this.config.internalAddress().getValue(), this.config.internalAddress().getKey());
             LOGGER.info("- External Addresses: {} (resolved from {})",
@@ -100,7 +100,7 @@ public final class GongdaobeiForge {
                     RedisClient.create(), c -> c.setOptions(GongdaobeiUtil.getRedisClientOptions()));
             this.conn = MasterReplica.connectAsync(
                     this.redisClient, StringCodec.UTF8, config.discoveryRedisUri().getValue()).whenComplete((c, e) -> {
-                var uri = config.discoveryRedisUri().getValue().toURI();
+                var uri = GongdaobeiUtil.desensitizeRedisUri(config.discoveryRedisUri().getValue());
                 if (c != null) {
                     LOGGER.info("Connected to the discovery redis server ({})", uri);
                 }

@@ -20,6 +20,7 @@ package org.teacon.gongdaobei;
 import com.google.common.base.Preconditions;
 import com.google.common.net.HostAndPort;
 import io.lettuce.core.ClientOptions;
+import io.lettuce.core.RedisURI;
 import io.lettuce.core.ScanArgs;
 import io.lettuce.core.ScanIterator;
 import io.lettuce.core.api.StatefulRedisConnection;
@@ -31,6 +32,21 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 
 public final class GongdaobeiUtil {
+    public static String desensitizeRedisUri(RedisURI uri) {
+        var builder = uri.getSocket() != null ? RedisURI.Builder.socket(uri.getSocket())
+                : uri.getHost() != null ? RedisURI.Builder.redis(uri.getHost(), uri.getPort()) : RedisURI.builder();
+
+        builder.withSsl(uri);
+        builder.withTimeout(uri.getTimeout());
+        builder.withDatabase(uri.getDatabase());
+
+        if (uri.getClientName() != null) {
+            builder.withClientName(uri.getClientName());
+        }
+
+        return builder.build().toURI().toString();
+    }
+
     public static ClientOptions getRedisClientOptions() {
         return ClientOptions.builder().publishOnScheduler(true).build();
     }
