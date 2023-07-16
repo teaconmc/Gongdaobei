@@ -19,12 +19,16 @@ package org.teacon.gongdaobei;
 
 import com.google.common.base.Preconditions;
 import com.google.common.net.HostAndPort;
+import com.google.common.util.concurrent.Runnables;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonPrimitive;
 import io.lettuce.core.RedisClient;
 import io.lettuce.core.api.StatefulRedisConnection;
 import io.lettuce.core.codec.StringCodec;
 import io.lettuce.core.masterreplica.MasterReplica;
+import io.prometheus.client.Counter;
+import io.prometheus.client.Gauge;
+import io.prometheus.client.exporter.HTTPServer;
 import net.md_5.bungee.api.ProxyServer;
 import net.md_5.bungee.api.ServerPing;
 import net.md_5.bungee.api.chat.TextComponent;
@@ -40,6 +44,7 @@ import net.md_5.bungee.event.EventHandler;
 
 import javax.annotation.Nullable;
 import java.io.Closeable;
+import java.io.IOException;
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 import java.net.InetSocketAddress;
@@ -48,13 +53,15 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Predicate;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import java.util.stream.IntStream;
 
 public final class GongdaobeiBungee extends Plugin {
-    private GongdaobeiTomlConfig.Common config;
+    private GongdaobeiTomlConfig.Bungee config;
     private Handler handler;
 
     @Override
@@ -62,7 +69,7 @@ public final class GongdaobeiBungee extends Plugin {
         Preconditions.checkArgument(this.getDataFolder().isDirectory() || this.getDataFolder().mkdirs());
         var file = this.getDataFolder().toPath().resolve("gongdaobei.toml");
         this.getLogger().info("Loading from the configuration file ...");
-        this.config = GongdaobeiTomlConfig.Common.load(file).save(file);
+        this.config = GongdaobeiTomlConfig.Bungee.load(file).save(file);
         this.getLogger().info("- Discovery Redis URI: " +
                         GongdaobeiUtil.desensitizeRedisUri(this.config.discoveryRedisUri().getValue()) +
                         " (resolved from " + this.config.discoveryRedisUri().getKey() + ")");
@@ -78,23 +85,39 @@ public final class GongdaobeiBungee extends Plugin {
         this.handler.close();
     }
 
+    public static final class PromMetrics {
+        private static final Counter totalPings = Counter
+                .build("gongdaobei_pings_total", "Total ping requests by clients").register();
+        private static final Counter totalLogins = Counter
+                .build("gongdaobei_logins_total", "Total login requests by clients").register();
+        private static final Counter totalLoginsWithAffinity = Counter
+                .build("gongdaobei_logins_with_affinity_total", "Total login requests by clients with affinity").register();
+        private static final Gauge onlinePlayers  = Gauge
+                .build("gongdaobei_online_players", "Online players of all the services").register();
+        private static final Gauge maximumPlayers = Gauge
+                .build("gongdaobei_maximum_players", "Maximum players of all the services (backend servers)").register();
+        private static final Gauge serviceInstances = Gauge
+                .build("gongdaobei_service_instances", "The instance count of services (backend servers)").register();
+        private static final Gauge latestServiceInstances = Gauge
+                .build("gongdaobei_latest_service_instances", "The instance count of services (backend servers) with latest version numbers").register();
+        private static final Gauge minimumTicksPerSecond = Gauge
+                .build("gongdaobei_minimum_tps", "The minimum tps of services (backend servers)").register();
+    }
 
     public record ServerEntry(boolean isTarget,
                               boolean isFallback,
                               HostAndPort internalAddress,
                               GongdaobeiServiceParams serviceParams) {
-        public static List<ServerEntry> from(PendingConnection connection,
+        public static List<ServerEntry> from(Predicate<GongdaobeiServiceParams> targetFilter,
+                                             Predicate<GongdaobeiServiceParams> fallbackFilter,
                                              Map<HostAndPort, GongdaobeiServiceParams> serviceParams) {
-            var playerExternalAddr = connection.getVirtualHost();
             var targetChoicesByInternal = new HashSet<HostAndPort>();
             var fallbackChoicesByInternal = new HashSet<HostAndPort>();
             var latestTargetVersion = new GongdaobeiTomlConfig.VersionPattern();
             var latestFallbackVersion = new GongdaobeiTomlConfig.VersionPattern();
             for (var entry : serviceParams.entrySet()) {
                 var params = entry.getValue();
-                var isTarget = !params.isRetired && params.externalAddresses.stream()
-                        .filter(addr -> addr.getHost().equals(playerExternalAddr.getHostString()))
-                        .anyMatch(addr -> !addr.hasPort() || addr.getPort() == playerExternalAddr.getPort());
+                var isTarget = !params.isRetired && targetFilter.test(params);
                 if (isTarget) {
                     if (params.version.compareTo(latestTargetVersion) > 0) {
                         latestTargetVersion = params.version;
@@ -104,7 +127,7 @@ public final class GongdaobeiBungee extends Plugin {
                         targetChoicesByInternal.add(entry.getKey());
                     }
                 }
-                var isFallback = !params.isRetired && params.isFallback;
+                var isFallback = !params.isRetired && params.isFallback && fallbackFilter.test(params);
                 if (isFallback) {
                     if (params.version.compareTo(latestFallbackVersion) > 0) {
                         latestFallbackVersion = params.version;
@@ -125,6 +148,16 @@ public final class GongdaobeiBungee extends Plugin {
                 }
             }
             return List.copyOf(result);
+        }
+
+        public static List<ServerEntry> from(PendingConnection connection,
+                                             Map<HostAndPort, GongdaobeiServiceParams> serviceParams) {
+            var playerExternalAddr = connection.getVirtualHost();
+            var playerExternalPort = playerExternalAddr == null ? -1 : playerExternalAddr.getPort();
+            var playerExternalHost = playerExternalAddr == null ? null : playerExternalAddr.getHostString();
+            return from(params -> params.externalAddresses.stream()
+                    .filter(addr -> addr.getHost().equals(playerExternalHost))
+                    .anyMatch(addr -> addr.getPortOrDefault(-1) == playerExternalPort), params -> true, serviceParams);
         }
 
         @Override
@@ -156,12 +189,14 @@ public final class GongdaobeiBungee extends Plugin {
         private final ProxyServer server;
         private final RedisClient redisClient;
         private final ScheduledTask scheduledTask;
+        private final Runnable prometheusCloseCallback;
         private final Random randomGenerator = new Random();
+        private final AtomicInteger scheduleCounter = new AtomicInteger();
         private final CompletableFuture<? extends StatefulRedisConnection<String, String>> conn;
         private final ConcurrentMap<HostAndPort, ServerInfo> cachedServerInfoMap = new ConcurrentHashMap<>();
         private final AtomicReference<Map<HostAndPort, GongdaobeiServiceParams>> serviceParams = new AtomicReference<>(Map.of());
 
-        public Handler(Plugin plugin, GongdaobeiTomlConfig.Common config) {
+        public Handler(Plugin plugin, GongdaobeiTomlConfig.Bungee config) {
             this.logger = plugin.getLogger();
             this.server = plugin.getProxy();
             this.redisClient = RedisClient.create();
@@ -179,10 +214,24 @@ public final class GongdaobeiBungee extends Plugin {
             });
             this.scheduledTask = this.server.getScheduler().schedule(plugin, this, 2500, 2500, TimeUnit.MILLISECONDS);
             this.server.getPluginManager().registerListener(plugin, this);
+            // noinspection UnstableApiUsage
+            var prometheusCloseCallback = Runnables.doNothing();
+            var httpServerPort = config.prometheusServerPort();
+            if (httpServerPort > 0) {
+                try {
+                    var httpServer = new HTTPServer.Builder().withPort(httpServerPort).build();
+                    this.logger.info("Launched the prometheus server at port " + httpServerPort);
+                    prometheusCloseCallback = httpServer::close;
+                } catch (IOException e) {
+                    this.logger.log(Level.SEVERE, "Failed to launch the prometheus server at port " + httpServerPort , e);
+                }
+            }
+            this.prometheusCloseCallback = prometheusCloseCallback;
         }
 
         @Override
         public void run() {
+            var index = this.scheduleCounter.getAndIncrement();
             var retiredServices = new LinkedHashSet<HostAndPort>();
             var joiningServices = new LinkedHashSet<HostAndPort>();
             var missingServices = new LinkedHashSet<HostAndPort>();
@@ -207,12 +256,40 @@ public final class GongdaobeiBungee extends Plugin {
                     missingServices.add(oldAddr);
                 }
             }
-            if (missingServices.size() > 0) {
-                this.logger.warning("Registered service status changed (retired: " +
-                        retiredServices + ", joining: " + joiningServices + ", missing: " + missingServices + ")");
-            } else if (retiredServices.size() + joiningServices.size() > 0) {
-                this.logger.info("Registered service status changed (retired: " +
-                        retiredServices + ", joining: " + joiningServices + ", missing: " + missingServices + ")");
+            if (index == 0 || missingServices.size() + retiredServices.size() + joiningServices.size() > 0) {
+                // add logs for changes
+                if (missingServices.size() > 0) {
+                    this.logger.warning("Registered service status changed (retired: " +
+                            retiredServices + ", joining: " + joiningServices + ", missing: " + missingServices + ")");
+                }
+                if (retiredServices.size() + joiningServices.size() > 0) {
+                    this.logger.info("Registered service status changed (retired: " +
+                            retiredServices + ", joining: " + joiningServices + ", missing: " + missingServices + ")");
+                }
+                // calculate latest servers (containing those with domains and fallback servers)
+                var latestByInternal = new HashSet<HostAndPort>();
+                for (var addr : newServiceParams.keySet()) {
+                    var targets = ServerEntry.from(p -> p.externalAddresses.contains(addr), p -> false, newServiceParams);
+                    targets.stream().map(ServerEntry::internalAddress).forEach(latestByInternal::add);
+                }
+                var fallbacks = ServerEntry.from(p -> false, p -> true, newServiceParams);
+                fallbacks.stream().map(ServerEntry::internalAddress).forEach(latestByInternal::add);
+                // push prom metrics
+                var onlinePlayers = 0;
+                var maximumPlayers = 0;
+                var minimumTicksPerSecond = 20.0;
+                for (var params : newServiceParams.values()) {
+                    onlinePlayers += params.onlinePlayers;
+                    maximumPlayers += params.maximumPlayers;
+                    minimumTicksPerSecond = Math.min(1000.0 / params.tickMillis, minimumTicksPerSecond);
+                }
+                var serviceCount = newServiceParams.size();
+                var latestServiceCount = latestByInternal.size();
+                PromMetrics.onlinePlayers.set(onlinePlayers);
+                PromMetrics.maximumPlayers.set(maximumPlayers);
+                PromMetrics.serviceInstances.set(serviceCount);
+                PromMetrics.latestServiceInstances.set(latestServiceCount);
+                PromMetrics.minimumTicksPerSecond.set(minimumTicksPerSecond);
             }
         }
 
@@ -244,6 +321,8 @@ public final class GongdaobeiBungee extends Plugin {
                         this.logger.info("Affinity server found, send the player to the " +
                                 "affinity server (" + affinityHost.get() + ", choices: " + playerChoices + ")");
                         event.setTarget(this.cachedServerInfoMap.get(affinityHost.get()));
+                        PromMetrics.totalLoginsWithAffinity.inc();
+                        PromMetrics.totalLogins.inc();
                         return;
                     }
                 }
@@ -265,6 +344,7 @@ public final class GongdaobeiBungee extends Plugin {
                         this.logger.info("Load balancing performed, send the player to the target or " +
                                 "fallback server (" + next.internalAddress() + ", choices: " + playerChoices + ")");
                         event.setTarget(this.cachedServerInfoMap.get(next.internalAddress()));
+                        PromMetrics.totalLogins.inc();
                         return;
                     }
                 }
@@ -299,11 +379,13 @@ public final class GongdaobeiBungee extends Plugin {
             }
             var maxWithLimit = limit > 0 ? Math.min(limit, maximum) : maximum;
             event.getResponse().setPlayers(new ServerPing.Players(maxWithLimit, online, new ServerPing.PlayerInfo[0]));
+            PromMetrics.totalPings.inc();
         }
 
         @Override
         public void close() {
             this.server.getPluginManager().unregisterListener(this);
+            this.prometheusCloseCallback.run();
             this.scheduledTask.cancel();
             this.redisClient.close();
         }

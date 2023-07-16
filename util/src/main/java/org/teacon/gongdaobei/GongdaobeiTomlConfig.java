@@ -41,12 +41,14 @@ import java.util.Optional;
 
 public final class GongdaobeiTomlConfig {
     private static final String DISCOVERY_REDIS_URI = "discoveryRedisUri";
+    private static final String PROM_SERVER_PORT = "prometheusServerPort";
     private static final String INTERNAL_ADDRESS = "internalAddress";
     private static final String EXTERNAL_ADDRESSES = "externalAddresses";
     private static final String IS_FALLBACK_SERVER = "isFallbackServer";
     private static final String VERSION = "version";
     private static final String AFFINITY_MILLIS = "affinityMillis";
     private static final String DEFAULT_DISCOVERY_REDIS_URI = "${gongdaobei.service.discovery:-redis://localhost:6379/0}";
+    private static final long DEFAULT_PROM_SERVER_PORT = 0L;
     private static final String DEFAULT_INTERNAL_ADDRESS = "${gongdaobei.service.internal:-localhost}";
     private static final List<String> DEFAULT_EXTERNAL_ADDRESSES = List.of();
     private static final boolean DEFAULT_IS_FALLBACK_SERVER = true;
@@ -90,24 +92,30 @@ public final class GongdaobeiTomlConfig {
         }
     }
 
-    public record Common(Pair<String, RedisURI> discoveryRedisUri) {
-        public Common save(Path configFile) {
+    public record Bungee(Pair<String, RedisURI> discoveryRedisUri,
+                         int prometheusServerPort) {
+        public Bungee save(Path configFile) {
             try (var output = Files.newBufferedWriter(configFile, StandardOpenOption.CREATE)) {
                 var toml = new TomlWriter.Builder().indentTablesBy(0).indentValuesBy(0).build();
                 var common = ImmutableMap.of(DISCOVERY_REDIS_URI, this.discoveryRedisUri.getKey());
-                toml.write(ImmutableMap.of("common", common), output);
+                var bungee = ImmutableMap.of(PROM_SERVER_PORT, this.prometheusServerPort);
+                toml.write(ImmutableMap.of("common", common, "bungee", bungee), output);
                 return this;
             } catch (IOException | ClassCastException e) {
                 throw new IllegalArgumentException(e);
             }
         }
 
-        public static Common load(Path configFile) {
+        public static Bungee load(Path configFile) {
             try (var input = Files.exists(configFile) ? Files.newBufferedReader(configFile) : Reader.nullReader()) {
                 var toml = new Toml().read(input);
                 var common = Optional.ofNullable(toml.getTable("common"));
+                var bungee = Optional.ofNullable(toml.getTable("bungee"));
                 var discoveryRedisUri = common.map(t -> t.getString(DISCOVERY_REDIS_URI)).orElse(DEFAULT_DISCOVERY_REDIS_URI).strip();
-                return new Common(Pair.of(discoveryRedisUri, RedisURI.create(StringSubstitutor.replaceSystemProperties(discoveryRedisUri))));
+                var prometheusServerPort = bungee.map(t -> t.getLong(PROM_SERVER_PORT)).orElse(DEFAULT_PROM_SERVER_PORT);
+                return new Bungee(
+                        Pair.of(discoveryRedisUri, RedisURI.create(StringSubstitutor.replaceSystemProperties(discoveryRedisUri))),
+                        Math.toIntExact(Math.min(65535L, Math.max(0L, prometheusServerPort))));
             } catch (IOException | ClassCastException e) {
                 throw new IllegalArgumentException(e);
             }

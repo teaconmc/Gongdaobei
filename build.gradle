@@ -29,6 +29,7 @@ dependencies {
     shadow 'com.moandjiezana.toml:toml4j:0.7.2'
     shadow 'io.lettuce:lettuce-core:6.2.4.RELEASE'
     shadow 'org.apache.commons:commons-text:1.10.0'
+    shadow 'io.prometheus:simpleclient_httpserver:0.16.0'
 }
 
 shadowJar {
@@ -54,6 +55,7 @@ shadowJar {
     }
     relocate 'reactor', 'org.teacon.gongdaobei.reactor'
     relocate 'io.lettuce', 'org.teacon.gongdaobei.lettuce'
+    relocate 'io.prometheus', 'org.teacon.gongdaobei.prometheus'
     relocate 'org.apache.commons', 'org.teacon.gongdaobei.commons'
     relocate 'com.moandjiezana.toml', 'org.teacon.gongdaobei.toml'
     relocate 'com.vdurmont.semver4j', 'org.teacon.gongdaobei.semver4j'
