@@ -17,6 +17,7 @@
  */
 package org.teacon.gongdaobei;
 
+import com.google.common.base.Preconditions;
 import com.google.gson.JsonNull;
 import com.mojang.logging.LogUtils;
 import com.mojang.serialization.JsonOps;
@@ -40,6 +41,8 @@ import org.apache.commons.lang3.tuple.Pair;
 import org.slf4j.Logger;
 
 import java.io.Closeable;
+import java.net.InetAddress;
+import java.net.UnknownHostException;
 import java.nio.file.Path;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -90,12 +93,19 @@ public final class GongdaobeiForge {
     }
 
     private static class Handler implements Runnable, Closeable {
+        private final String hostname;
         private final RedisClient redisClient;
         private final CompletableFuture<? extends StatefulRedisConnection<String, String>> conn;
         private final DedicatedServer server;
         private final GongdaobeiTomlConfig.Service config;
 
         public Handler(DedicatedServer server, GongdaobeiTomlConfig.Service config) {
+            try {
+                this.hostname = InetAddress.getLocalHost().getHostName();
+                Preconditions.checkArgument(this.hostname.matches("[A-Za-z0-9-.]+"));
+            } catch (UnknownHostException e) {
+                throw new IllegalArgumentException(e);
+            }
             this.redisClient = Util.make(
                     RedisClient.create(), c -> c.setOptions(GongdaobeiUtil.getRedisClientOptions()));
             this.conn = MasterReplica.connectAsync(
@@ -130,7 +140,7 @@ public final class GongdaobeiForge {
                         JsonOps.INSTANCE, new ServerStatusPing()).result().orElse(JsonNull.INSTANCE);
                 var params = Map.entry(
                         this.config.internalAddress().getValue().withDefaultPort(this.server.getPort()),
-                        new GongdaobeiServiceParams(
+                        new GongdaobeiServiceParams(this.hostname,
                                 this.config, false, this.server.getMotd(),
                                 this.twentyTicksAvgMillis(this.server.tickTimes, count),
                                 this.server.getPlayerCount(), this.server.getMaxPlayers(), pingForgeData));
@@ -143,7 +153,7 @@ public final class GongdaobeiForge {
             var count = this.server.getTickCount();
             var params = Map.entry(
                     this.config.internalAddress().getValue().withDefaultPort(this.server.getPort()),
-                    new GongdaobeiServiceParams(
+                    new GongdaobeiServiceParams(this.hostname,
                             this.config, true, this.server.getMotd(),
                             this.twentyTicksAvgMillis(this.server.tickTimes, count),
                             this.server.getPlayerCount(), this.server.getMaxPlayers(), JsonNull.INSTANCE));

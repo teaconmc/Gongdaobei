@@ -32,6 +32,7 @@ import java.util.stream.Collectors;
 public final class GongdaobeiServiceParams {
     private static final Gson GSON = new GsonBuilder().create();
 
+    public final String hostname;
     public final boolean isFallback;
     public final List<HostAndPort> externalAddresses;
     public final String motd;
@@ -44,6 +45,7 @@ public final class GongdaobeiServiceParams {
     public final JsonElement pingForgeData;
 
     private GongdaobeiServiceParams(Map<String, String> serviceParams) {
+        this.hostname = serviceParams.getOrDefault("config:hostname", "default");
         this.isFallback = Boolean.parseBoolean(serviceParams.getOrDefault("config:fallback", "false"));
         this.externalAddresses = List.of(Arrays
                 .stream(serviceParams.getOrDefault("config:external", "").stripLeading().split("\\s+"))
@@ -59,9 +61,10 @@ public final class GongdaobeiServiceParams {
         this.pingForgeData = GSON.fromJson(serviceParams.getOrDefault("status:forgedata", "{}"), JsonElement.class);
     }
 
-    public GongdaobeiServiceParams(GongdaobeiTomlConfig.Service config,
-                                   boolean isServerRetired, String motd,
+    public GongdaobeiServiceParams(String hostname,
+                                   GongdaobeiTomlConfig.Service config, boolean isServerRetired, String motd,
                                    double tickMillis, int onlinePlayers, int maximumPlayers, JsonElement pingForgeData) {
+        this.hostname = hostname;
         this.isFallback = config.isFallbackServer();
         this.externalAddresses = List.of(config.externalAddresses()
                 .stream().map(Pair::getValue).toArray(HostAndPort[]::new));
@@ -80,17 +83,18 @@ public final class GongdaobeiServiceParams {
     }
 
     public Map<String, String> toParams() {
-        return Map.of(
-                "config:fallback", Boolean.toString(this.isFallback),
-                "config:external", this.externalAddresses
-                        .stream().map(HostAndPort::toString).collect(Collectors.joining("\t")),
-                "config:motd", this.motd,
-                "config:version", this.version.toString(),
-                "config:affinity", Long.toUnsignedString(this.affinityMillis),
-                "status:register", Boolean.toString(!this.isRetired),
-                "status:tick", String.format("%.8f", this.tickMillis),
-                "status:online", Integer.toUnsignedString(this.onlinePlayers),
-                "status:maximum", Integer.toUnsignedString(this.maximumPlayers),
-                "status:forgedata", GSON.toJson(this.pingForgeData));
+        return Map.ofEntries(
+                Map.entry("config:hostname", this.hostname),
+                Map.entry("config:fallback", Boolean.toString(this.isFallback)),
+                Map.entry("config:external", this.externalAddresses
+                        .stream().map(HostAndPort::toString).collect(Collectors.joining("\t"))),
+                Map.entry("config:motd", this.motd),
+                Map.entry("config:version", this.version.toString()),
+                Map.entry("config:affinity", Long.toUnsignedString(this.affinityMillis)),
+                Map.entry("status:register", Boolean.toString(!this.isRetired)),
+                Map.entry("status:tick", String.format("%.8f", this.tickMillis)),
+                Map.entry("status:online", Integer.toUnsignedString(this.onlinePlayers)),
+                Map.entry("status:maximum", Integer.toUnsignedString(this.maximumPlayers)),
+                Map.entry("status:forgedata", GSON.toJson(this.pingForgeData)));
     }
 }

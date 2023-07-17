@@ -18,6 +18,9 @@
 package org.teacon.gongdaobei;
 
 import com.google.common.base.Preconditions;
+import com.google.common.collect.Iterables;
+import com.google.common.collect.LinkedHashMultimap;
+import com.google.common.collect.Sets;
 import com.google.common.net.HostAndPort;
 import com.google.common.util.concurrent.Runnables;
 import com.google.gson.JsonObject;
@@ -71,8 +74,8 @@ public final class GongdaobeiBungee extends Plugin {
         this.getLogger().info("Loading from the configuration file ...");
         this.config = GongdaobeiTomlConfig.Bungee.load(file).save(file);
         this.getLogger().info("- Discovery Redis URI: " +
-                        GongdaobeiUtil.desensitizeRedisUri(this.config.discoveryRedisUri().getValue()) +
-                        " (resolved from " + this.config.discoveryRedisUri().getKey() + ")");
+                GongdaobeiUtil.desensitizeRedisUri(this.config.discoveryRedisUri().getValue()) +
+                " (resolved from " + this.config.discoveryRedisUri().getKey() + ")");
         this.handler = new Handler(this, this.config);
     }
 
@@ -86,22 +89,69 @@ public final class GongdaobeiBungee extends Plugin {
     }
 
     public static final class PromMetrics {
-        private static final Counter totalPings = Counter
-                .build("gongdaobei_pings_total", "Total ping requests by clients").register();
-        private static final Counter totalLogins = Counter
-                .build("gongdaobei_logins_total", "Total login requests by clients").register();
-        private static final Counter totalLoginsWithAffinity = Counter
-                .build("gongdaobei_logins_with_affinity_total", "Total login requests by clients with affinity").register();
-        private static final Gauge onlinePlayers  = Gauge
-                .build("gongdaobei_online_players", "Online players of all the services").register();
-        private static final Gauge maximumPlayers = Gauge
-                .build("gongdaobei_maximum_players", "Maximum players of all the services (backend servers)").register();
-        private static final Gauge serviceInstances = Gauge
-                .build("gongdaobei_service_instances", "The instance count of services (backend servers)").register();
-        private static final Gauge latestServiceInstances = Gauge
-                .build("gongdaobei_latest_service_instances", "The instance count of services (backend servers) with latest version numbers").register();
-        private static final Gauge minimumTicksPerSecond = Gauge
-                .build("gongdaobei_minimum_tps", "The minimum tps of services (backend servers)").register();
+        private static final Counter totalPings;
+        private static final Counter totalLogins;
+        private static final Counter totalLoginsWithAffinity;
+        private static final Gauge onlinePlayers;
+        private static final Gauge fallbackOnlinePlayers;
+        private static final Gauge targetedOnlinePlayers;
+        private static final Gauge maximumPlayers;
+        private static final Gauge fallbackMaximumPlayers;
+        private static final Gauge targetedMaximumPlayers;
+        private static final Gauge serviceInstances;
+        private static final Gauge fallbackServiceInstances;
+        private static final Gauge targetedServiceInstances;
+        private static final Gauge latestFallbackServiceInstances;
+        private static final Gauge latestTargetedServiceInstances;
+        private static final Gauge serviceTickDurationSeconds;
+
+        static {
+            totalPings = Counter.build(
+                    "gongdaobei_pings_total",
+                    "Total ping requests by clients").register();
+            totalLogins = Counter.build(
+                    "gongdaobei_logins_total",
+                    "Total login requests by clients").register();
+            totalLoginsWithAffinity = Counter.build(
+                    "gongdaobei_logins_with_affinity_total",
+                    "Total login requests by clients with affinity").register();
+            onlinePlayers = Gauge.build(
+                    "gongdaobei_online_players",
+                    "Online players of all the servers").register();
+            fallbackOnlinePlayers = Gauge.build(
+                    "gongdaobei_fallback_online_players",
+                    "Online players of fallback servers").register();
+            targetedOnlinePlayers = Gauge.build(
+                    "gongdaobei_targeted_online_players",
+                    "Online players of servers with the same external address").labelNames("address").register();
+            maximumPlayers = Gauge.build(
+                    "gongdaobei_maximum_players",
+                    "Maximum players of all the servers").register();
+            fallbackMaximumPlayers = Gauge.build(
+                    "gongdaobei_fallback_maximum_players",
+                    "Maximum players of servers marked as fallback servers").register();
+            targetedMaximumPlayers = Gauge.build(
+                    "gongdaobei_targeted_maximum_players",
+                    "Maximum players of servers with the same external address").labelNames("address").register();
+            serviceInstances = Gauge.build(
+                    "gongdaobei_service_instances",
+                    "The instance count of servers").register();
+            fallbackServiceInstances = Gauge.build(
+                    "gongdaobei_fallback_service_instances",
+                    "The instance count of fallback servers").register();
+            targetedServiceInstances = Gauge.build(
+                    "gongdaobei_targeted_service_instances",
+                    "The instance count of servers with the same external address").labelNames("address").register();
+            latestFallbackServiceInstances = Gauge.build(
+                    "gongdaobei_latest_fallback_service_instances",
+                    "The instance count of fallback servers whose version is latest").register();
+            latestTargetedServiceInstances = Gauge.build(
+                    "gongdaobei_latest_targeted_service_instances",
+                    "The instance count of servers with the same external address whose version is latest").labelNames("address").register();
+            serviceTickDurationSeconds = Gauge.build(
+                    "gongdaobei_service_tick_duration_seconds",
+                    "The time spent per tick in seconds").labelNames("name").register();
+        }
     }
 
     public record ServerEntry(boolean isTarget,
@@ -223,7 +273,7 @@ public final class GongdaobeiBungee extends Plugin {
                     this.logger.info("Launched the prometheus server at port " + httpServerPort);
                     prometheusCloseCallback = httpServer::close;
                 } catch (IOException e) {
-                    this.logger.log(Level.SEVERE, "Failed to launch the prometheus server at port " + httpServerPort , e);
+                    this.logger.log(Level.SEVERE, "Failed to launch the prometheus server at port " + httpServerPort, e);
                 }
             }
             this.prometheusCloseCallback = prometheusCloseCallback;
@@ -232,64 +282,112 @@ public final class GongdaobeiBungee extends Plugin {
         @Override
         public void run() {
             var index = this.scheduleCounter.getAndIncrement();
+            var missingServices = new LinkedHashSet<HostAndPort>();
             var retiredServices = new LinkedHashSet<HostAndPort>();
             var joiningServices = new LinkedHashSet<HostAndPort>();
-            var missingServices = new LinkedHashSet<HostAndPort>();
-            var services = GongdaobeiUtil.getServiceParams(this.conn);
-            var newServiceParams = new LinkedHashMap<HostAndPort, GongdaobeiServiceParams>(services.size());
-            for (var entry : services.entrySet()) {
-                var params = entry.getValue();
-                var socket = InetSocketAddress.createUnresolved(entry.getKey().getHost(), entry.getKey().getPort());
-                this.cachedServerInfoMap.computeIfAbsent(entry.getKey(), k -> {
-                    var serverName = "gongdaobei:" + entry.getKey();
+            var newFallbackInternals = new LinkedHashSet<HostAndPort>();
+            var newExternalToInternals = LinkedHashMultimap.<HostAndPort, HostAndPort>create();
+            var newServiceParams = GongdaobeiUtil.getServiceParams(this.conn);
+            for (var newAddrEntry : newServiceParams.entrySet()) {
+                var newAddr = newAddrEntry.getKey();
+                var params = newAddrEntry.getValue();
+                var socket = InetSocketAddress.createUnresolved(newAddr.getHost(), newAddr.getPort());
+                this.cachedServerInfoMap.computeIfAbsent(newAddr, k -> {
+                    var serverName = "gongdaobei:" + params.hostname + ":" + newAddr;
                     return this.server.constructServerInfo(serverName, socket, params.motd, false);
                 });
-                newServiceParams.put(entry.getKey(), params);
-                (params.isRetired ? retiredServices : joiningServices).add(entry.getKey());
+                if (params.isRetired) {
+                    retiredServices.add(newAddr);
+                } else {
+                    joiningServices.add(newAddr);
+                    if (params.isFallback) {
+                        newFallbackInternals.add(newAddr);
+                    }
+                    params.externalAddresses.forEach(addr -> newExternalToInternals.put(addr, newAddr));
+                }
             }
+            var oldFallbackInternals = new LinkedHashSet<HostAndPort>();
+            var oldExternalToInternals = LinkedHashMultimap.<HostAndPort, HostAndPort>create();
             var oldServiceParams = this.serviceParams.getAndSet(Map.copyOf(newServiceParams));
             for (var oldAddrEntry : oldServiceParams.entrySet()) {
                 var oldAddr = oldAddrEntry.getKey();
-                if (oldAddrEntry.getValue().isRetired) {
+                var params = oldAddrEntry.getValue();
+                if (params.isRetired) {
                     retiredServices.remove(oldAddr);
-                } else if (!joiningServices.remove(oldAddr) && !retiredServices.contains(oldAddr)) {
-                    missingServices.add(oldAddr);
+                } else {
+                    if (!joiningServices.remove(oldAddr) && !retiredServices.contains(oldAddr)) {
+                        missingServices.add(oldAddr);
+                    }
+                    if (params.isFallback) {
+                        oldFallbackInternals.add(oldAddr);
+                    }
+                    params.externalAddresses.forEach(addr -> oldExternalToInternals.put(addr, oldAddr));
                 }
             }
-            if (index == 0 || missingServices.size() + retiredServices.size() + joiningServices.size() > 0) {
-                // add logs for changes
-                if (missingServices.size() > 0) {
-                    this.logger.warning("Registered service status changed (retired: " +
-                            retiredServices + ", joining: " + joiningServices + ", missing: " + missingServices + ")");
+            var isFirst = index == 0;
+            var hasMissing = missingServices.size() > 0;
+            var hasJoiningOrRetired = joiningServices.size() + retiredServices.size() > 0;
+            var hasDifferentFallbacks = !newFallbackInternals.equals(oldFallbackInternals);
+            var hasDifferentTargetedMappings = !newExternalToInternals.equals(oldExternalToInternals);
+            // add logs for changes
+            if (hasMissing) {
+                this.logger.warning("Registered service status changed (retired: " +
+                        retiredServices + ", joining: " + joiningServices + ", missing: " + missingServices + ")");
+            } else if (hasJoiningOrRetired) {
+                this.logger.info("Registered service status changed (retired: " +
+                        retiredServices + ", joining: " + joiningServices + ", missing: " + missingServices + ")");
+            }
+            // push prom metrics of total
+            var onlinePlayers = newServiceParams.values().stream().mapToInt(p -> p.onlinePlayers).sum();
+            var maximumPlayers = newServiceParams.values().stream().mapToInt(p -> p.maximumPlayers).sum();
+            PromMetrics.onlinePlayers.set(onlinePlayers);
+            PromMetrics.maximumPlayers.set(maximumPlayers);
+            PromMetrics.serviceInstances.set(newServiceParams.size());
+            // push prom metrics of all the servers
+            for (var entry : newServiceParams.entrySet()) {
+                var tickDurationSeconds = entry.getValue().tickMillis / 1000.0;
+                if (!entry.getValue().isRetired) {
+                    var serverName = this.cachedServerInfoMap.get(entry.getKey()).getName();
+                    PromMetrics.serviceTickDurationSeconds.labels(serverName).set(tickDurationSeconds);
                 }
-                if (retiredServices.size() + joiningServices.size() > 0) {
-                    this.logger.info("Registered service status changed (retired: " +
-                            retiredServices + ", joining: " + joiningServices + ", missing: " + missingServices + ")");
+            }
+            for (var addr : Iterables.concat(missingServices, retiredServices)) {
+                var serverName = this.cachedServerInfoMap.get(addr).getName();
+                PromMetrics.serviceTickDurationSeconds.remove(serverName);
+            }
+            // push prom metrics of fallback servers
+            if (isFirst || hasDifferentFallbacks) {
+                var latestFallback = ServerEntry
+                        .from(p -> false, p -> true, newServiceParams);
+                var fallbackOnlinePlayers = newFallbackInternals.stream()
+                        .map(newServiceParams::get).mapToInt(e -> e.onlinePlayers).sum();
+                var fallbackMaximumPlayers = newFallbackInternals.stream()
+                        .map(newServiceParams::get).mapToInt(e -> e.maximumPlayers).sum();
+                PromMetrics.fallbackOnlinePlayers.set(fallbackOnlinePlayers);
+                PromMetrics.fallbackMaximumPlayers.set(fallbackMaximumPlayers);
+                PromMetrics.fallbackServiceInstances.set(newFallbackInternals.size());
+                PromMetrics.latestFallbackServiceInstances.set(latestFallback.size());
+            }
+            // push prom metrics of targeted servers
+            if (isFirst || hasDifferentTargetedMappings) {
+                for (var entry : newExternalToInternals.asMap().entrySet()) {
+                    var latestTargeted = ServerEntry
+                            .from(p -> p.externalAddresses.contains(entry.getKey()), p -> false, newServiceParams);
+                    var targetedOnlinePlayers = entry.getValue().stream()
+                            .map(newServiceParams::get).mapToInt(e -> e.onlinePlayers).sum();
+                    var targetedMaximumPlayers = entry.getValue().stream()
+                            .map(newServiceParams::get).mapToInt(e -> e.maximumPlayers).sum();
+                    PromMetrics.targetedOnlinePlayers.labels(entry.getKey().toString()).set(targetedOnlinePlayers);
+                    PromMetrics.targetedMaximumPlayers.labels(entry.getKey().toString()).set(targetedMaximumPlayers);
+                    PromMetrics.targetedServiceInstances.labels(entry.getKey().toString()).set(entry.getValue().size());
+                    PromMetrics.latestTargetedServiceInstances.labels(entry.getKey().toString()).set(latestTargeted.size());
                 }
-                // calculate latest servers (containing those with domains and fallback servers)
-                var latestByInternal = new HashSet<HostAndPort>();
-                for (var addr : newServiceParams.keySet()) {
-                    var targets = ServerEntry.from(p -> p.externalAddresses.contains(addr), p -> false, newServiceParams);
-                    targets.stream().map(ServerEntry::internalAddress).forEach(latestByInternal::add);
+                for (var addr : Sets.difference(oldExternalToInternals.keySet(), newExternalToInternals.keySet())) {
+                    PromMetrics.targetedOnlinePlayers.remove(addr.toString());
+                    PromMetrics.targetedMaximumPlayers.remove(addr.toString());
+                    PromMetrics.targetedServiceInstances.remove(addr.toString());
+                    PromMetrics.latestTargetedServiceInstances.remove(addr.toString());
                 }
-                var fallbacks = ServerEntry.from(p -> false, p -> true, newServiceParams);
-                fallbacks.stream().map(ServerEntry::internalAddress).forEach(latestByInternal::add);
-                // push prom metrics
-                var onlinePlayers = 0;
-                var maximumPlayers = 0;
-                var minimumTicksPerSecond = 20.0;
-                for (var params : newServiceParams.values()) {
-                    onlinePlayers += params.onlinePlayers;
-                    maximumPlayers += params.maximumPlayers;
-                    minimumTicksPerSecond = Math.min(1000.0 / params.tickMillis, minimumTicksPerSecond);
-                }
-                var serviceCount = newServiceParams.size();
-                var latestServiceCount = latestByInternal.size();
-                PromMetrics.onlinePlayers.set(onlinePlayers);
-                PromMetrics.maximumPlayers.set(maximumPlayers);
-                PromMetrics.serviceInstances.set(serviceCount);
-                PromMetrics.latestServiceInstances.set(latestServiceCount);
-                PromMetrics.minimumTicksPerSecond.set(minimumTicksPerSecond);
             }
         }
 
