@@ -58,20 +58,22 @@ Prometheus Metrics 服务器会在 Bungee 侧开放，并监听 `prometheusServe
 
 以下是 Prometheus Metrics 服务器提供的指标：
 
-| 指标类型    | 指标名                                                     | 解释                                  |
-|---------|---------------------------------------------------------|-------------------------------------|
-| Counter | `gongdaobei_pings_total`                                | 服务器 bungee 侧总共 ping 了多少次            |
-| Counter | `gongdaobei_logins_total`                               | 服务器 bungee 侧总共有多少次有效登录              |
-| Counter | `gongdaobei_logins_with_affinity_total`                 | 服务器 bungee 侧总共有多少次在亲和有效时间内的有效登录     |
-| Gauge   | `gongdaobei_online_players`                             | 服务器总共多少在线玩家                         |
-| Gauge   | `gongdaobei_fallback_online_players`                    | 服务器标记为 fallback 的端总共多少在线玩家          |
-| Gauge   | `gongdaobei_targeted_online_players{address}`           | 服务器标记 `address` 外部域名的端总共多少在线玩家      |
-| Gauge   | `gongdaobei_maximum_players`                            | 服务器玩家上限的值求和                         |
-| Gauge   | `gongdaobei_fallback_maximum_players`                   | 服务器标记为 fallback 的端玩家上限的值求和          |
-| Gauge   | `gongdaobei_targeted_maximum_players{address}`          | 服务器标记 `address` 外部域名的端玩家上限的值求和      |
-| Gauge   | `gongdaobei_service_instances`                          | 服务器总共注册了多少端                         |
-| Gauge   | `gongdaobei_fallback_service_instances`                 | 服务器总共注册了多少标记为 fallback 的端           |
-| Gauge   | `gongdaobei_targeted_service_instances{address}`        | 服务器总共注册了多少标记 `address` 外部域名的端       |
-| Gauge   | `gongdaobei_latest_fallback_service_instances`          | 服务器总共注册了多少标记为 fallback 且为最新版本的端     |
-| Gauge   | `gongdaobei_latest_targeted_service_instances{address}` | 服务器总共注册了多少标记 `address` 外部域名且为最新版本的端 |
-| Gauge   | `gongdaobei_service_tick_duration_seconds{name}`        | 服务器中名称标记为 `name` 的端每 tick 所占用的秒数    |
+| 指标类型    | 指标名                                                               | 解释                                                 |
+|---------|-------------------------------------------------------------------|----------------------------------------------------|
+| Counter | `gongdaobei_pings_total`                                          | 服务器 bungee 侧总共 ping 了多少次                           |
+| Counter | `gongdaobei_logins_total`                                         | 服务器 bungee 侧总共有多少次有效登录                             |
+| Counter | `gongdaobei_logins_with_affinity_total`                           | 服务器 bungee 侧总共有多少次在亲和有效时间内的有效登录                    |
+| Gauge   | `gongdaobei_online_players`                                       | 服务器总共多少在线玩家                                        |
+| Gauge   | `gongdaobei_fallback_online_players`                              | 服务器标记为 fallback 的端总共多少在线玩家                         |
+| Gauge   | `gongdaobei_targeted_online_players{address}`                     | 服务器标记 `address` 外部域名的端总共多少在线玩家                     |
+| Gauge   | `gongdaobei_maximum_players`                                      | 服务器玩家上限的值求和                                        |
+| Gauge   | `gongdaobei_fallback_maximum_players`                             | 服务器标记为 fallback 的端玩家上限的值求和                         |
+| Gauge   | `gongdaobei_targeted_maximum_players{address}`                    | 服务器标记 `address` 外部域名的端玩家上限的值求和                     |
+| Gauge   | `gongdaobei_service_instances`                                    | 服务器总共注册了多少端                                        |
+| Gauge   | `gongdaobei_fallback_service_instances`                           | 服务器总共注册了多少标记为 fallback 的端                          |
+| Gauge   | `gongdaobei_targeted_service_instances{address}`                  | 服务器总共注册了多少标记 `address` 外部域名的端                      |
+| Gauge   | `gongdaobei_latest_fallback_service_instances`                    | 服务器总共注册了多少标记为 fallback 且为最新版本的端                    |
+| Gauge   | `gongdaobei_latest_targeted_service_instances{address}`           | 服务器总共注册了多少标记 `address` 外部域名且为最新版本的端                |
+| Gauge   | `gongdaobei_service_tick_duration_seconds{name}`                  | 服务器中名称标记为 `name` 的端每 tick 所占用的秒数                   |
+| Gauge   | `gongdaobei_fallback_service_tick_duration_seconds{name}`         | 服务器中名称标记为 `name` 且标记为 fallback 的端每 tick 所占用的秒数     |
+| Gauge   | `gongdaobei_targeted_service_tick_duration_seconds{address,name}` | 服务器中名称标记为 `name` 且标记 `address` 外部域名的端每 tick 所占用的秒数 |

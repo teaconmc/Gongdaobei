@@ -20,6 +20,7 @@ package org.teacon.gongdaobei;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.LinkedHashMultimap;
+import com.google.common.collect.Multimaps;
 import com.google.common.collect.Sets;
 import com.google.common.net.HostAndPort;
 import com.google.common.util.concurrent.Runnables;
@@ -103,7 +104,9 @@ public final class GongdaobeiBungee extends Plugin {
         private static final Gauge targetedServiceInstances;
         private static final Gauge latestFallbackServiceInstances;
         private static final Gauge latestTargetedServiceInstances;
-        private static final Gauge serviceTickDurationSeconds;
+        private static final Gauge servicePerTick;
+        private static final Gauge fallbackServicePerTick;
+        private static final Gauge targetedServicePerTick;
 
         static {
             totalPings = Counter.build(
@@ -148,9 +151,15 @@ public final class GongdaobeiBungee extends Plugin {
             latestTargetedServiceInstances = Gauge.build(
                     "gongdaobei_latest_targeted_service_instances",
                     "The instance count of servers with the same external address whose version is latest").labelNames("address").register();
-            serviceTickDurationSeconds = Gauge.build(
+            servicePerTick = Gauge.build(
                     "gongdaobei_service_tick_duration_seconds",
                     "The time spent per tick in seconds").labelNames("name").register();
+            fallbackServicePerTick = Gauge.build(
+                    "gongdaobei_fallback_service_tick_duration_seconds",
+                    "The time spent per tick in seconds of fallback servers").labelNames("name").register();
+            targetedServicePerTick = Gauge.build(
+                    "gongdaobei_targeted_service_tick_duration_seconds",
+                    "The time spent per tick in seconds of servers grouped by external addresses").labelNames("address", "name").register();
         }
     }
 
@@ -345,15 +354,15 @@ public final class GongdaobeiBungee extends Plugin {
             PromMetrics.serviceInstances.set(newServiceParams.size());
             // push prom metrics of all the servers
             for (var entry : newServiceParams.entrySet()) {
-                var tickDurationSeconds = entry.getValue().tickMillis / 1000.0;
+                var perTick = entry.getValue().tickMillis / 1000.0;
                 if (!entry.getValue().isRetired) {
                     var serverName = this.cachedServerInfoMap.get(entry.getKey()).getName();
-                    PromMetrics.serviceTickDurationSeconds.labels(serverName).set(tickDurationSeconds);
+                    PromMetrics.servicePerTick.labels(serverName).set(perTick);
                 }
             }
             for (var addr : Iterables.concat(missingServices, retiredServices)) {
                 var serverName = this.cachedServerInfoMap.get(addr).getName();
-                PromMetrics.serviceTickDurationSeconds.remove(serverName);
+                PromMetrics.servicePerTick.remove(serverName);
             }
             // push prom metrics of fallback servers
             if (isFirst || hasDifferentFallbacks) {
@@ -367,26 +376,49 @@ public final class GongdaobeiBungee extends Plugin {
                 PromMetrics.fallbackMaximumPlayers.set(fallbackMaximumPlayers);
                 PromMetrics.fallbackServiceInstances.set(newFallbackInternals.size());
                 PromMetrics.latestFallbackServiceInstances.set(latestFallback.size());
+                for (var addr : newFallbackInternals) {
+                    var perTick = newServiceParams.get(addr).tickMillis / 1000.0;
+                    var serverName = this.cachedServerInfoMap.get(addr).getName();
+                    PromMetrics.fallbackServicePerTick.labels(serverName).set(perTick);
+                }
+                for (var addr : Sets.difference(oldFallbackInternals, newFallbackInternals)) {
+                    var serverName = this.cachedServerInfoMap.get(addr).getName();
+                    PromMetrics.fallbackServicePerTick.remove(serverName);
+                }
             }
             // push prom metrics of targeted servers
             if (isFirst || hasDifferentTargetedMappings) {
-                for (var entry : newExternalToInternals.asMap().entrySet()) {
+                for (var externalAddr : newExternalToInternals.asMap().keySet()) {
+                    var instances = newExternalToInternals.get(externalAddr);
                     var latestTargeted = ServerEntry
-                            .from(p -> p.externalAddresses.contains(entry.getKey()), p -> false, newServiceParams);
-                    var targetedOnlinePlayers = entry.getValue().stream()
+                            .from(p -> p.externalAddresses.contains(externalAddr), p -> false, newServiceParams);
+                    var targetedOnlinePlayers = instances.stream()
                             .map(newServiceParams::get).mapToInt(e -> e.onlinePlayers).sum();
-                    var targetedMaximumPlayers = entry.getValue().stream()
+                    var targetedMaximumPlayers = instances.stream()
                             .map(newServiceParams::get).mapToInt(e -> e.maximumPlayers).sum();
-                    PromMetrics.targetedOnlinePlayers.labels(entry.getKey().toString()).set(targetedOnlinePlayers);
-                    PromMetrics.targetedMaximumPlayers.labels(entry.getKey().toString()).set(targetedMaximumPlayers);
-                    PromMetrics.targetedServiceInstances.labels(entry.getKey().toString()).set(entry.getValue().size());
-                    PromMetrics.latestTargetedServiceInstances.labels(entry.getKey().toString()).set(latestTargeted.size());
+                    PromMetrics.targetedOnlinePlayers.labels(externalAddr.toString()).set(targetedOnlinePlayers);
+                    PromMetrics.targetedMaximumPlayers.labels(externalAddr.toString()).set(targetedMaximumPlayers);
+                    PromMetrics.targetedServiceInstances.labels(externalAddr.toString()).set(instances.size());
+                    PromMetrics.latestTargetedServiceInstances.labels(externalAddr.toString()).set(latestTargeted.size());
+                    for (var addr: instances) {
+                        var perTick = newServiceParams.get(addr).tickMillis / 1000.0;
+                        var serverName = this.cachedServerInfoMap.get(addr).getName();
+                        PromMetrics.targetedServicePerTick.labels(externalAddr.toString(), serverName).set(perTick);
+                    }
+                    for (var addr: Sets.difference(oldExternalToInternals.get(externalAddr), instances)) {
+                        var serverName = this.cachedServerInfoMap.get(addr).getName();
+                        PromMetrics.targetedServicePerTick.remove(externalAddr.toString(), serverName);
+                    }
                 }
-                for (var addr : Sets.difference(oldExternalToInternals.keySet(), newExternalToInternals.keySet())) {
-                    PromMetrics.targetedOnlinePlayers.remove(addr.toString());
-                    PromMetrics.targetedMaximumPlayers.remove(addr.toString());
-                    PromMetrics.targetedServiceInstances.remove(addr.toString());
-                    PromMetrics.latestTargetedServiceInstances.remove(addr.toString());
+                for (var externalAddr : Sets.difference(oldExternalToInternals.keySet(), newExternalToInternals.keySet())) {
+                    PromMetrics.targetedOnlinePlayers.remove(externalAddr.toString());
+                    PromMetrics.targetedMaximumPlayers.remove(externalAddr.toString());
+                    PromMetrics.targetedServiceInstances.remove(externalAddr.toString());
+                    PromMetrics.latestTargetedServiceInstances.remove(externalAddr.toString());
+                    for (var addr: oldExternalToInternals.get(externalAddr)) {
+                        var serverName = this.cachedServerInfoMap.get(addr).getName();
+                        PromMetrics.targetedServicePerTick.remove(externalAddr.toString(), serverName);
+                    }
                 }
             }
         }
