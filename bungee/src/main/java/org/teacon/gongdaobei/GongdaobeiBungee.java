@@ -299,17 +299,11 @@ public final class GongdaobeiBungee extends Plugin {
             var offlineServices = Sets.difference(prevRegistry.getInternalAddrOnline(), onlineServices);
             var retiredServices = Sets.intersection(offlineServices, registry.getInternalAddrRetired());
             var missingServices = Sets.difference(offlineServices, registry.getInternalAddrRetired());
-            // calculate flags
-            var isFirst = index == 0;
-            var hasMissing = missingServices.size() > 0;
-            var hasJoiningOrRetired = joiningServices.size() + retiredServices.size() > 0;
-            var hasDifferentFallbacks = !currentFallback.equals(previousFallback);
-            var hasDifferentTargetedMappings = !currentTargeted.equals(previousTargeted);
             // add logs for changes
-            if (hasMissing) {
+            if (missingServices.size() > 0) {
                 this.logger.warning("Registered service status changed at update " + index + " (retired: " +
                         retiredServices + ", joining: " + joiningServices + ", missing: " + missingServices + ")");
-            } else if (hasJoiningOrRetired) {
+            } else if (joiningServices.size() + retiredServices.size() > 0) {
                 this.logger.info("Registered service status changed at update " + index + " (retired: " +
                         retiredServices + ", joining: " + joiningServices + ", missing: " + missingServices + ")");
             }
@@ -330,58 +324,54 @@ public final class GongdaobeiBungee extends Plugin {
                 PromMetrics.servicePerTick.remove(serverName);
             }
             // push prom metrics of fallback servers
-            if (isFirst || hasDifferentFallbacks) {
-                var fallbackOnlineSum = currentFallback.getRight().stream().mapToInt(k -> registry.getParams(k).onlinePlayers).sum();
-                var fallbackMaximumSum = currentFallback.getRight().stream().mapToInt(k -> registry.getParams(k).maximumPlayers).sum();
-                PromMetrics.fallbackOnlinePlayers.set(fallbackOnlineSum);
-                PromMetrics.fallbackMaximumPlayers.set(fallbackMaximumSum);
-                PromMetrics.fallbackServiceInstances.set(currentFallback.getRight().size());
-                PromMetrics.latestFallbackServiceInstances.set(currentFallback.getLeft().size());
-                for (var internalAddr : currentFallback.getRight()) {
-                    var params = registry.getParams(internalAddr);
-                    var serverName = this.cachedServerInfoMap.get(internalAddr).getName();
-                    PromMetrics.fallbackServicePerTick.labels(serverName).set(params.tickMillis / 1000.0);
-                }
-                var offlineFallbacks = Sets.difference(previousFallback.getRight(), currentFallback.getRight());
-                for (var internalAddr : offlineFallbacks) {
-                    var serverName = this.cachedServerInfoMap.get(internalAddr).getName();
-                    PromMetrics.fallbackServicePerTick.remove(serverName);
-                }
+            var fallbackOnlineSum = currentFallback.getRight().stream().mapToInt(k -> registry.getParams(k).onlinePlayers).sum();
+            var fallbackMaximumSum = currentFallback.getRight().stream().mapToInt(k -> registry.getParams(k).maximumPlayers).sum();
+            PromMetrics.fallbackOnlinePlayers.set(fallbackOnlineSum);
+            PromMetrics.fallbackMaximumPlayers.set(fallbackMaximumSum);
+            PromMetrics.fallbackServiceInstances.set(currentFallback.getRight().size());
+            PromMetrics.latestFallbackServiceInstances.set(currentFallback.getLeft().size());
+            for (var internalAddr : currentFallback.getRight()) {
+                var params = registry.getParams(internalAddr);
+                var serverName = this.cachedServerInfoMap.get(internalAddr).getName();
+                PromMetrics.fallbackServicePerTick.labels(serverName).set(params.tickMillis / 1000.0);
+            }
+            var offlineFallbacks = Sets.difference(previousFallback.getRight(), currentFallback.getRight());
+            for (var internalAddr : offlineFallbacks) {
+                var serverName = this.cachedServerInfoMap.get(internalAddr).getName();
+                PromMetrics.fallbackServicePerTick.remove(serverName);
             }
             // push prom metrics of targeted servers
-            if (isFirst || hasDifferentTargetedMappings) {
-                for (var entry : currentTargeted.entrySet()) {
-                    var current = entry.getValue();
-                    var externalAddr = entry.getKey();
-                    var targetedOnlineSum = current.getRight().stream().mapToInt(k -> registry.getParams(k).onlinePlayers).sum();
-                    var targetedMaximumSum = current.getRight().stream().mapToInt(k -> registry.getParams(k).maximumPlayers).sum();
-                    PromMetrics.targetedOnlinePlayers.labels(externalAddr.toString()).set(targetedOnlineSum);
-                    PromMetrics.targetedMaximumPlayers.labels(externalAddr.toString()).set(targetedMaximumSum);
-                    PromMetrics.targetedServiceInstances.labels(externalAddr.toString()).set(current.getRight().size());
-                    PromMetrics.latestTargetedServiceInstances.labels(externalAddr.toString()).set(current.getLeft().size());
-                    for (var internalAddr: current.getRight()) {
-                        var params = registry.getParams(internalAddr);
-                        var serverName = this.cachedServerInfoMap.get(internalAddr).getName();
-                        PromMetrics.targetedServicePerTick.labels(externalAddr.toString(), serverName).set(params.tickMillis / 1000.0);
-                    }
-                    var prev = previousTargeted.get(externalAddr);
-                    var offline = prev != null ? Sets.difference(prev.getRight(), current.getRight()) : Set.<HostAndPort>of();
-                    for (var internalAddr : offline) {
-                        var serverName = this.cachedServerInfoMap.get(internalAddr).getName();
-                        PromMetrics.targetedServicePerTick.remove(externalAddr.toString(), serverName);
-                    }
+            for (var entry : currentTargeted.entrySet()) {
+                var current = entry.getValue();
+                var externalAddr = entry.getKey();
+                var targetedOnlineSum = current.getRight().stream().mapToInt(k -> registry.getParams(k).onlinePlayers).sum();
+                var targetedMaximumSum = current.getRight().stream().mapToInt(k -> registry.getParams(k).maximumPlayers).sum();
+                PromMetrics.targetedOnlinePlayers.labels(externalAddr.toString()).set(targetedOnlineSum);
+                PromMetrics.targetedMaximumPlayers.labels(externalAddr.toString()).set(targetedMaximumSum);
+                PromMetrics.targetedServiceInstances.labels(externalAddr.toString()).set(current.getRight().size());
+                PromMetrics.latestTargetedServiceInstances.labels(externalAddr.toString()).set(current.getLeft().size());
+                for (var internalAddr: current.getRight()) {
+                    var params = registry.getParams(internalAddr);
+                    var serverName = this.cachedServerInfoMap.get(internalAddr).getName();
+                    PromMetrics.targetedServicePerTick.labels(externalAddr.toString(), serverName).set(params.tickMillis / 1000.0);
                 }
-                for (var externalAddr : Sets.difference(previousTargeted.keySet(), currentTargeted.keySet())) {
-                    PromMetrics.targetedOnlinePlayers.remove(externalAddr.toString());
-                    PromMetrics.targetedMaximumPlayers.remove(externalAddr.toString());
-                    PromMetrics.targetedServiceInstances.remove(externalAddr.toString());
-                    PromMetrics.latestTargetedServiceInstances.remove(externalAddr.toString());
-                    var prev = previousTargeted.get(externalAddr);
-                    var offline = prev != null ? prev.getRight() : Set.<HostAndPort>of();
-                    for (var addr : offline) {
-                        var serverName = this.cachedServerInfoMap.get(addr).getName();
-                        PromMetrics.targetedServicePerTick.remove(externalAddr.toString(), serverName);
-                    }
+                var prev = previousTargeted.get(externalAddr);
+                var offline = prev != null ? Sets.difference(prev.getRight(), current.getRight()) : Set.<HostAndPort>of();
+                for (var internalAddr : offline) {
+                    var serverName = this.cachedServerInfoMap.get(internalAddr).getName();
+                    PromMetrics.targetedServicePerTick.remove(externalAddr.toString(), serverName);
+                }
+            }
+            for (var externalAddr : Sets.difference(previousTargeted.keySet(), currentTargeted.keySet())) {
+                PromMetrics.targetedOnlinePlayers.remove(externalAddr.toString());
+                PromMetrics.targetedMaximumPlayers.remove(externalAddr.toString());
+                PromMetrics.targetedServiceInstances.remove(externalAddr.toString());
+                PromMetrics.latestTargetedServiceInstances.remove(externalAddr.toString());
+                var prev = previousTargeted.get(externalAddr);
+                var offline = prev != null ? prev.getRight() : Set.<HostAndPort>of();
+                for (var addr : offline) {
+                    var serverName = this.cachedServerInfoMap.get(addr).getName();
+                    PromMetrics.targetedServicePerTick.remove(externalAddr.toString(), serverName);
                 }
             }
         }

@@ -98,7 +98,7 @@ public final class GongdaobeiRegistry {
                         this.latestFallbackInternalSet.clear();
                         this.latestFallback = params.version;
                     }
-                    if (cmp == 0) {
+                    if (cmp >= 0) {
                         this.latestFallbackInternalSet.add(internalAddr);
                     }
                 }
@@ -111,7 +111,7 @@ public final class GongdaobeiRegistry {
                             this.latestTargetedInternalMap.removeAll(k);
                             latestTargeted = params.version;
                         }
-                        if (cmp == 0) {
+                        if (cmp >= 0) {
                             this.latestTargetedInternalMap.put(k, internalAddr);
                         }
                         return latestTargeted;

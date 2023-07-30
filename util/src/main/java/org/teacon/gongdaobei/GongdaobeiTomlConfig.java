@@ -104,7 +104,7 @@ public final class GongdaobeiTomlConfig {
                 var common = ImmutableMap.of(DISCOVERY_REDIS_URI, this.discoveryRedisUri.getKey());
                 var bungee = ImmutableMap.of(
                         PROM_SERVER_PORT, this.prometheusServerPort,
-                        EXTERNAL_ADDRESS_WHITELIST, this.externalAddressWhitelist);
+                        EXTERNAL_ADDRESS_WHITELIST, this.externalAddressWhitelist.stream().map(Pair::getKey).toList());
                 toml.write(ImmutableMap.of("common", common, "bungee", bungee), output);
                 return this;
             } catch (IOException | ClassCastException e) {
