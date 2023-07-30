@@ -60,6 +60,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
 public final class GongdaobeiBungee extends Plugin {
@@ -227,6 +228,7 @@ public final class GongdaobeiBungee extends Plugin {
         private final RedisClient redisClient;
         private final ScheduledTask scheduledTask;
         private final Runnable prometheusCloseCallback;
+        private final Set<HostAndPort> externalAddressWhitelist;
         private final AtomicReference<GongdaobeiRegistry> currentRegistry;
         private final Random randomGenerator = new Random();
         private final AtomicInteger scheduleCounter = new AtomicInteger();
@@ -238,6 +240,7 @@ public final class GongdaobeiBungee extends Plugin {
             this.server = plugin.getProxy();
             this.redisClient = RedisClient.create();
             this.redisClient.setOptions(GongdaobeiUtil.getRedisClientOptions());
+            this.externalAddressWhitelist = config.externalAddressWhitelist().stream().map(Pair::getValue).collect(Collectors.toSet());
             this.conn = MasterReplica.connectAsync(
                     this.redisClient, StringCodec.UTF8, config.discoveryRedisUri().getValue()).whenComplete((c, e) -> {
                 var uri = GongdaobeiUtil.desensitizeRedisUri(config.discoveryRedisUri().getValue());
@@ -272,7 +275,8 @@ public final class GongdaobeiBungee extends Plugin {
             // update index
             var index = this.scheduleCounter.getAndIncrement();
             // update registry
-            var registry = GongdaobeiUtil.getRegistryByRedis(this.conn, this::getOrCreateServerName);
+            var registry = GongdaobeiUtil.getRegistryByRedis(
+                    this.conn, this.externalAddressWhitelist, this::getOrCreateServerName);
             var prevRegistry = this.currentRegistry.getAndSet(registry);
             // calculate fallback and targeted
             var currentFallback = Pair.of(

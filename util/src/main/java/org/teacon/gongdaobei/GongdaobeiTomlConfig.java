@@ -36,12 +36,14 @@ import java.io.Reader;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
 public final class GongdaobeiTomlConfig {
     private static final String DISCOVERY_REDIS_URI = "discoveryRedisUri";
     private static final String PROM_SERVER_PORT = "prometheusServerPort";
+    private static final String EXTERNAL_ADDRESS_WHITELIST = "externalAddressWhitelist";
     private static final String INTERNAL_ADDRESS = "internalAddress";
     private static final String EXTERNAL_ADDRESSES = "externalAddresses";
     private static final String IS_FALLBACK_SERVER = "isFallbackServer";
@@ -49,6 +51,7 @@ public final class GongdaobeiTomlConfig {
     private static final String AFFINITY_MILLIS = "affinityMillis";
     private static final String DEFAULT_DISCOVERY_REDIS_URI = "${gongdaobei.service.discovery:-redis://localhost:6379/0}";
     private static final long DEFAULT_PROM_SERVER_PORT = 0L;
+    private static final List<String> DEFAULT_EXTERNAL_ADDRESS_WHITELIST = List.of();
     private static final String DEFAULT_INTERNAL_ADDRESS = "${gongdaobei.service.internal:-localhost}";
     private static final List<String> DEFAULT_EXTERNAL_ADDRESSES = List.of();
     private static final boolean DEFAULT_IS_FALLBACK_SERVER = true;
@@ -93,12 +96,15 @@ public final class GongdaobeiTomlConfig {
     }
 
     public record Bungee(Pair<String, RedisURI> discoveryRedisUri,
-                         int prometheusServerPort) {
+                         int prometheusServerPort,
+                         List<Pair<String, HostAndPort>> externalAddressWhitelist) {
         public Bungee save(Path configFile) {
             try (var output = Files.newBufferedWriter(configFile, StandardOpenOption.CREATE)) {
                 var toml = new TomlWriter.Builder().indentTablesBy(0).indentValuesBy(0).build();
                 var common = ImmutableMap.of(DISCOVERY_REDIS_URI, this.discoveryRedisUri.getKey());
-                var bungee = ImmutableMap.of(PROM_SERVER_PORT, this.prometheusServerPort);
+                var bungee = ImmutableMap.of(
+                        PROM_SERVER_PORT, this.prometheusServerPort,
+                        EXTERNAL_ADDRESS_WHITELIST, this.externalAddressWhitelist);
                 toml.write(ImmutableMap.of("common", common, "bungee", bungee), output);
                 return this;
             } catch (IOException | ClassCastException e) {
@@ -113,9 +119,12 @@ public final class GongdaobeiTomlConfig {
                 var bungee = Optional.ofNullable(toml.getTable("bungee"));
                 var discoveryRedisUri = common.map(t -> t.getString(DISCOVERY_REDIS_URI)).orElse(DEFAULT_DISCOVERY_REDIS_URI).strip();
                 var prometheusServerPort = bungee.map(t -> t.getLong(PROM_SERVER_PORT)).orElse(DEFAULT_PROM_SERVER_PORT);
+                var externalAddressWhitelist = bungee.map(t -> t.<String>getList(EXTERNAL_ADDRESS_WHITELIST)).orElse(DEFAULT_EXTERNAL_ADDRESS_WHITELIST);
                 return new Bungee(
                         Pair.of(discoveryRedisUri, RedisURI.create(StringSubstitutor.replaceSystemProperties(discoveryRedisUri))),
-                        Math.toIntExact(Math.min(65535L, Math.max(0L, prometheusServerPort))));
+                        Math.toIntExact(Math.min(65535L, Math.max(0L, prometheusServerPort))),
+                        externalAddressWhitelist.stream().map(a -> Pair.of(a, HostAndPort.fromString(
+                                StringSubstitutor.replaceSystemProperties(a)).requireBracketsForIPv6())).toList());
             } catch (IOException | ClassCastException e) {
                 throw new IllegalArgumentException(e);
             }

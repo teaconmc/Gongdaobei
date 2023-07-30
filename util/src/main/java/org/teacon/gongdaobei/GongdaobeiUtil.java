@@ -27,10 +27,10 @@ import io.lettuce.core.api.StatefulRedisConnection;
 
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.BiFunction;
-import java.util.function.Function;
 
 public final class GongdaobeiUtil {
     public static String desensitizeRedisUri(RedisURI uri) {
@@ -66,6 +66,7 @@ public final class GongdaobeiUtil {
 
     public static GongdaobeiRegistry getRegistryByRedis(
             CompletableFuture<? extends StatefulRedisConnection<String, String>> conn,
+            Set<HostAndPort> externalAddressWhitelist,
             BiFunction<? super HostAndPort, ? super GongdaobeiServiceParams, String> nameFunction) {
         var commands = conn.join().sync();
         var builder = new GongdaobeiRegistry.Builder(nameFunction);
@@ -75,6 +76,7 @@ public final class GongdaobeiUtil {
             var addr = GongdaobeiUtil.getHostAndPort(key, "gongdaobei:service:", true);
             addr.ifPresent(h -> builder.params(h, GongdaobeiServiceParams.fromParams(commands.hgetall(key))));
         }
+        externalAddressWhitelist.forEach(builder::whitelist);
         return builder.build();
     }
 
