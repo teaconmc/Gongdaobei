@@ -25,11 +25,12 @@ import io.lettuce.core.ScanArgs;
 import io.lettuce.core.ScanIterator;
 import io.lettuce.core.api.StatefulRedisConnection;
 
-import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.BiFunction;
+import java.util.function.Function;
 
 public final class GongdaobeiUtil {
     public static String desensitizeRedisUri(RedisURI uri) {
@@ -63,17 +64,18 @@ public final class GongdaobeiUtil {
         conn.join().sync().psetex("gongdaobei:affinity:" + playerUniqueId, affinityMillis, target.toString());
     }
 
-    public static Map<HostAndPort, GongdaobeiServiceParams> getServiceParams(
-            CompletableFuture<? extends StatefulRedisConnection<String, String>> conn) {
+    public static GongdaobeiRegistry getRegistryByRedis(
+            CompletableFuture<? extends StatefulRedisConnection<String, String>> conn,
+            BiFunction<? super HostAndPort, ? super GongdaobeiServiceParams, String> nameFunction) {
         var commands = conn.join().sync();
-        var params = new HashMap<HostAndPort, GongdaobeiServiceParams>();
+        var builder = new GongdaobeiRegistry.Builder(nameFunction);
         var scanned = ScanIterator.scan(commands, new ScanArgs().match("gongdaobei:service:*"));
         while (scanned.hasNext()) {
             var key = scanned.next();
             var addr = GongdaobeiUtil.getHostAndPort(key, "gongdaobei:service:", true);
-            addr.ifPresent(h -> params.put(h, GongdaobeiServiceParams.fromParams(commands.hgetall(key))));
+            addr.ifPresent(h -> builder.params(h, GongdaobeiServiceParams.fromParams(commands.hgetall(key))));
         }
-        return Map.copyOf(params);
+        return builder.build();
     }
 
     public static void setServiceParams(

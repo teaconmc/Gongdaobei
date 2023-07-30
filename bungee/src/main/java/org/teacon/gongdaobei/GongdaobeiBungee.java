@@ -18,9 +18,7 @@
 package org.teacon.gongdaobei;
 
 import com.google.common.base.Preconditions;
-import com.google.common.collect.Iterables;
-import com.google.common.collect.LinkedHashMultimap;
-import com.google.common.collect.Multimaps;
+import com.google.common.collect.Maps;
 import com.google.common.collect.Sets;
 import com.google.common.net.HostAndPort;
 import com.google.common.util.concurrent.Runnables;
@@ -45,6 +43,7 @@ import net.md_5.bungee.api.plugin.Listener;
 import net.md_5.bungee.api.plugin.Plugin;
 import net.md_5.bungee.api.scheduler.ScheduledTask;
 import net.md_5.bungee.event.EventHandler;
+import org.apache.commons.lang3.tuple.Pair;
 
 import javax.annotation.Nullable;
 import java.io.Closeable;
@@ -59,7 +58,6 @@ import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.Predicate;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import java.util.stream.IntStream;
@@ -167,56 +165,36 @@ public final class GongdaobeiBungee extends Plugin {
                               boolean isFallback,
                               HostAndPort internalAddress,
                               GongdaobeiServiceParams serviceParams) {
-        public static List<ServerEntry> from(Predicate<GongdaobeiServiceParams> targetFilter,
-                                             Predicate<GongdaobeiServiceParams> fallbackFilter,
-                                             Map<HostAndPort, GongdaobeiServiceParams> serviceParams) {
-            var targetChoicesByInternal = new HashSet<HostAndPort>();
-            var fallbackChoicesByInternal = new HashSet<HostAndPort>();
-            var latestTargetVersion = new GongdaobeiTomlConfig.VersionPattern();
-            var latestFallbackVersion = new GongdaobeiTomlConfig.VersionPattern();
-            for (var entry : serviceParams.entrySet()) {
-                var params = entry.getValue();
-                var isTarget = !params.isRetired && targetFilter.test(params);
-                if (isTarget) {
-                    if (params.version.compareTo(latestTargetVersion) > 0) {
-                        latestTargetVersion = params.version;
-                        targetChoicesByInternal.clear();
-                    }
-                    if (params.version.compareTo(latestTargetVersion) == 0) {
-                        targetChoicesByInternal.add(entry.getKey());
-                    }
+        public static List<ServerEntry> from(PendingConnection connection, GongdaobeiRegistry registry) {
+            var targetedExternals = new LinkedHashSet<HostAndPort>();
+            var playerExternalAddr = connection.getVirtualHost();
+            if (playerExternalAddr != null) {
+                var addr = HostAndPort.fromString(playerExternalAddr.getHostString());
+                if (registry.getTargetedExternalAddrOnline().contains(addr)) {
+                    targetedExternals.add(addr);
                 }
-                var isFallback = !params.isRetired && params.isFallback && fallbackFilter.test(params);
-                if (isFallback) {
-                    if (params.version.compareTo(latestFallbackVersion) > 0) {
-                        latestFallbackVersion = params.version;
-                        fallbackChoicesByInternal.clear();
-                    }
-                    if (params.version.compareTo(latestFallbackVersion) == 0) {
-                        fallbackChoicesByInternal.add(entry.getKey());
-                    }
+                addr = HostAndPort.fromParts(playerExternalAddr.getHostString(), playerExternalAddr.getPort());
+                if (registry.getTargetedExternalAddrOnline().contains(addr)) {
+                    targetedExternals.add(addr);
                 }
             }
-            var hasTargetServer = !targetChoicesByInternal.isEmpty();
-            var result = new ArrayList<ServerEntry>(serviceParams.size());
-            for (var entry : serviceParams.entrySet()) {
-                var isTargetServer = targetChoicesByInternal.contains(entry.getKey());
-                var isFallbackServer = fallbackChoicesByInternal.contains(entry.getKey());
-                if (hasTargetServer ? isTargetServer : isFallbackServer) {
-                    result.add(new ServerEntry(isTargetServer, isFallbackServer, entry.getKey(), entry.getValue()));
+            var result = new ArrayList<ServerEntry>();
+            if (targetedExternals.isEmpty()) {
+                var fallbackInternals = registry.getFallbackInternalAddrOnline(true);
+                for (var internalAddr : fallbackInternals) {
+                    var params = registry.getParams(internalAddr);
+                    result.add(new ServerEntry(false, true, internalAddr, params));
+                }
+            } else {
+                for (var externalAddr: targetedExternals) {
+                    var targetedInternals = registry.getTargetedInternalAddrOnline(externalAddr, true);
+                    for (var internalAddr : targetedInternals) {
+                        var params = registry.getParams(internalAddr);
+                        result.add(new ServerEntry(true, false, internalAddr, params));
+                    }
                 }
             }
             return List.copyOf(result);
-        }
-
-        public static List<ServerEntry> from(PendingConnection connection,
-                                             Map<HostAndPort, GongdaobeiServiceParams> serviceParams) {
-            var playerExternalAddr = connection.getVirtualHost();
-            var playerExternalPort = playerExternalAddr == null ? -1 : playerExternalAddr.getPort();
-            var playerExternalHost = playerExternalAddr == null ? null : playerExternalAddr.getHostString();
-            return from(params -> params.externalAddresses.stream()
-                    .filter(addr -> addr.getHost().equals(playerExternalHost))
-                    .anyMatch(addr -> !addr.hasPort() || addr.getPort() == playerExternalPort), params -> true, serviceParams);
         }
 
         @Override
@@ -249,11 +227,11 @@ public final class GongdaobeiBungee extends Plugin {
         private final RedisClient redisClient;
         private final ScheduledTask scheduledTask;
         private final Runnable prometheusCloseCallback;
+        private final AtomicReference<GongdaobeiRegistry> currentRegistry;
         private final Random randomGenerator = new Random();
         private final AtomicInteger scheduleCounter = new AtomicInteger();
         private final CompletableFuture<? extends StatefulRedisConnection<String, String>> conn;
         private final ConcurrentMap<HostAndPort, ServerInfo> cachedServerInfoMap = new ConcurrentHashMap<>();
-        private final AtomicReference<Map<HostAndPort, GongdaobeiServiceParams>> serviceParams = new AtomicReference<>(Map.of());
 
         public Handler(Plugin plugin, GongdaobeiTomlConfig.Bungee config) {
             this.logger = plugin.getLogger();
@@ -286,136 +264,117 @@ public final class GongdaobeiBungee extends Plugin {
                 }
             }
             this.prometheusCloseCallback = prometheusCloseCallback;
+            this.currentRegistry = new AtomicReference<>(new GongdaobeiRegistry.Builder(this::getOrCreateServerName).build());
         }
 
         @Override
         public void run() {
+            // update index
             var index = this.scheduleCounter.getAndIncrement();
-            var missingServices = new LinkedHashSet<HostAndPort>();
-            var retiredServices = new LinkedHashSet<HostAndPort>();
-            var joiningServices = new LinkedHashSet<HostAndPort>();
-            var newFallbackInternals = new LinkedHashSet<HostAndPort>();
-            var newExternalToInternals = LinkedHashMultimap.<HostAndPort, HostAndPort>create();
-            var newServiceParams = GongdaobeiUtil.getServiceParams(this.conn);
-            for (var newAddrEntry : newServiceParams.entrySet()) {
-                var newAddr = newAddrEntry.getKey();
-                var params = newAddrEntry.getValue();
-                var socket = InetSocketAddress.createUnresolved(newAddr.getHost(), newAddr.getPort());
-                this.cachedServerInfoMap.computeIfAbsent(newAddr, k -> {
-                    var serverName = "gongdaobei:" + params.hostname + ":" + newAddr;
-                    return this.server.constructServerInfo(serverName, socket, params.motd, false);
-                });
-                if (params.isRetired) {
-                    retiredServices.add(newAddr);
-                } else {
-                    joiningServices.add(newAddr);
-                    if (params.isFallback) {
-                        newFallbackInternals.add(newAddr);
-                    }
-                    params.externalAddresses.forEach(addr -> newExternalToInternals.put(addr, newAddr));
-                }
-            }
-            var oldFallbackInternals = new LinkedHashSet<HostAndPort>();
-            var oldExternalToInternals = LinkedHashMultimap.<HostAndPort, HostAndPort>create();
-            var oldServiceParams = this.serviceParams.getAndSet(Map.copyOf(newServiceParams));
-            for (var oldAddrEntry : oldServiceParams.entrySet()) {
-                var oldAddr = oldAddrEntry.getKey();
-                var params = oldAddrEntry.getValue();
-                if (params.isRetired) {
-                    retiredServices.remove(oldAddr);
-                } else {
-                    if (!joiningServices.remove(oldAddr) && !retiredServices.contains(oldAddr)) {
-                        missingServices.add(oldAddr);
-                    }
-                    if (params.isFallback) {
-                        oldFallbackInternals.add(oldAddr);
-                    }
-                    params.externalAddresses.forEach(addr -> oldExternalToInternals.put(addr, oldAddr));
-                }
-            }
+            // update registry
+            var registry = GongdaobeiUtil.getRegistryByRedis(this.conn, this::getOrCreateServerName);
+            var prevRegistry = this.currentRegistry.getAndSet(registry);
+            // calculate fallback and targeted
+            var currentFallback = Pair.of(
+                    registry.getFallbackInternalAddrOnline(true),
+                    registry.getFallbackInternalAddrOnline(false));
+            var previousFallback = Pair.of(
+                    prevRegistry.getFallbackInternalAddrOnline(true),
+                    prevRegistry.getFallbackInternalAddrOnline(false));
+            var currentTargeted = Maps.toMap(
+                    registry.getTargetedExternalAddrOnline(), k -> Pair.of(
+                            registry.getTargetedInternalAddrOnline(k, true),
+                            registry.getTargetedInternalAddrOnline(k, false)));
+            var previousTargeted = Maps.toMap(
+                    prevRegistry.getTargetedExternalAddrOnline(), k -> Pair.of(
+                            prevRegistry.getTargetedInternalAddrOnline(k, true),
+                            prevRegistry.getTargetedInternalAddrOnline(k, false)));
+            // calculate changed online services
+            var onlineServices = registry.getInternalAddrOnline();
+            var joiningServices = Sets.difference(onlineServices, prevRegistry.getInternalAddrOnline());
+            var offlineServices = Sets.difference(prevRegistry.getInternalAddrOnline(), onlineServices);
+            var retiredServices = Sets.intersection(offlineServices, registry.getInternalAddrRetired());
+            var missingServices = Sets.difference(offlineServices, registry.getInternalAddrRetired());
+            // calculate flags
             var isFirst = index == 0;
             var hasMissing = missingServices.size() > 0;
             var hasJoiningOrRetired = joiningServices.size() + retiredServices.size() > 0;
-            var hasDifferentFallbacks = !newFallbackInternals.equals(oldFallbackInternals);
-            var hasDifferentTargetedMappings = !newExternalToInternals.equals(oldExternalToInternals);
+            var hasDifferentFallbacks = !currentFallback.equals(previousFallback);
+            var hasDifferentTargetedMappings = !currentTargeted.equals(previousTargeted);
             // add logs for changes
             if (hasMissing) {
-                this.logger.warning("Registered service status changed (retired: " +
+                this.logger.warning("Registered service status changed at update " + index + " (retired: " +
                         retiredServices + ", joining: " + joiningServices + ", missing: " + missingServices + ")");
             } else if (hasJoiningOrRetired) {
-                this.logger.info("Registered service status changed (retired: " +
+                this.logger.info("Registered service status changed at update " + index + " (retired: " +
                         retiredServices + ", joining: " + joiningServices + ", missing: " + missingServices + ")");
             }
             // push prom metrics of total
-            var onlinePlayers = newServiceParams.values().stream().mapToInt(p -> p.onlinePlayers).sum();
-            var maximumPlayers = newServiceParams.values().stream().mapToInt(p -> p.maximumPlayers).sum();
-            PromMetrics.onlinePlayers.set(onlinePlayers);
-            PromMetrics.maximumPlayers.set(maximumPlayers);
-            PromMetrics.serviceInstances.set(newServiceParams.size());
+            var onlineSum = onlineServices.stream().mapToInt(k -> registry.getParams(k).onlinePlayers).sum();
+            var maximumSum = onlineServices.stream().mapToInt(k -> registry.getParams(k).maximumPlayers).sum();
+            PromMetrics.onlinePlayers.set(onlineSum);
+            PromMetrics.maximumPlayers.set(maximumSum);
+            PromMetrics.serviceInstances.set(onlineServices.size());
             // push prom metrics of all the servers
-            for (var entry : newServiceParams.entrySet()) {
-                var perTick = entry.getValue().tickMillis / 1000.0;
-                if (!entry.getValue().isRetired) {
-                    var serverName = this.cachedServerInfoMap.get(entry.getKey()).getName();
-                    PromMetrics.servicePerTick.labels(serverName).set(perTick);
-                }
+            for (var internalAddr: onlineServices) {
+                var params = registry.getParams(internalAddr);
+                var serverName = this.cachedServerInfoMap.get(internalAddr).getName();
+                PromMetrics.servicePerTick.labels(serverName).set(params.tickMillis / 1000.0);
             }
-            for (var addr : Iterables.concat(missingServices, retiredServices)) {
-                var serverName = this.cachedServerInfoMap.get(addr).getName();
+            for (var internalAddr : offlineServices) {
+                var serverName = this.cachedServerInfoMap.get(internalAddr).getName();
                 PromMetrics.servicePerTick.remove(serverName);
             }
             // push prom metrics of fallback servers
             if (isFirst || hasDifferentFallbacks) {
-                var latestFallback = ServerEntry
-                        .from(p -> false, p -> true, newServiceParams);
-                var fallbackOnlinePlayers = newFallbackInternals.stream()
-                        .map(newServiceParams::get).mapToInt(e -> e.onlinePlayers).sum();
-                var fallbackMaximumPlayers = newFallbackInternals.stream()
-                        .map(newServiceParams::get).mapToInt(e -> e.maximumPlayers).sum();
-                PromMetrics.fallbackOnlinePlayers.set(fallbackOnlinePlayers);
-                PromMetrics.fallbackMaximumPlayers.set(fallbackMaximumPlayers);
-                PromMetrics.fallbackServiceInstances.set(newFallbackInternals.size());
-                PromMetrics.latestFallbackServiceInstances.set(latestFallback.size());
-                for (var addr : newFallbackInternals) {
-                    var perTick = newServiceParams.get(addr).tickMillis / 1000.0;
-                    var serverName = this.cachedServerInfoMap.get(addr).getName();
-                    PromMetrics.fallbackServicePerTick.labels(serverName).set(perTick);
+                var fallbackOnlineSum = currentFallback.getRight().stream().mapToInt(k -> registry.getParams(k).onlinePlayers).sum();
+                var fallbackMaximumSum = currentFallback.getRight().stream().mapToInt(k -> registry.getParams(k).maximumPlayers).sum();
+                PromMetrics.fallbackOnlinePlayers.set(fallbackOnlineSum);
+                PromMetrics.fallbackMaximumPlayers.set(fallbackMaximumSum);
+                PromMetrics.fallbackServiceInstances.set(currentFallback.getRight().size());
+                PromMetrics.latestFallbackServiceInstances.set(currentFallback.getLeft().size());
+                for (var internalAddr : currentFallback.getRight()) {
+                    var params = registry.getParams(internalAddr);
+                    var serverName = this.cachedServerInfoMap.get(internalAddr).getName();
+                    PromMetrics.fallbackServicePerTick.labels(serverName).set(params.tickMillis / 1000.0);
                 }
-                for (var addr : Sets.difference(oldFallbackInternals, newFallbackInternals)) {
-                    var serverName = this.cachedServerInfoMap.get(addr).getName();
+                var offlineFallbacks = Sets.difference(previousFallback.getRight(), currentFallback.getRight());
+                for (var internalAddr : offlineFallbacks) {
+                    var serverName = this.cachedServerInfoMap.get(internalAddr).getName();
                     PromMetrics.fallbackServicePerTick.remove(serverName);
                 }
             }
             // push prom metrics of targeted servers
             if (isFirst || hasDifferentTargetedMappings) {
-                for (var externalAddr : newExternalToInternals.asMap().keySet()) {
-                    var instances = newExternalToInternals.get(externalAddr);
-                    var latestTargeted = ServerEntry
-                            .from(p -> p.externalAddresses.contains(externalAddr), p -> false, newServiceParams);
-                    var targetedOnlinePlayers = instances.stream()
-                            .map(newServiceParams::get).mapToInt(e -> e.onlinePlayers).sum();
-                    var targetedMaximumPlayers = instances.stream()
-                            .map(newServiceParams::get).mapToInt(e -> e.maximumPlayers).sum();
-                    PromMetrics.targetedOnlinePlayers.labels(externalAddr.toString()).set(targetedOnlinePlayers);
-                    PromMetrics.targetedMaximumPlayers.labels(externalAddr.toString()).set(targetedMaximumPlayers);
-                    PromMetrics.targetedServiceInstances.labels(externalAddr.toString()).set(instances.size());
-                    PromMetrics.latestTargetedServiceInstances.labels(externalAddr.toString()).set(latestTargeted.size());
-                    for (var addr: instances) {
-                        var perTick = newServiceParams.get(addr).tickMillis / 1000.0;
-                        var serverName = this.cachedServerInfoMap.get(addr).getName();
-                        PromMetrics.targetedServicePerTick.labels(externalAddr.toString(), serverName).set(perTick);
+                for (var entry : currentTargeted.entrySet()) {
+                    var current = entry.getValue();
+                    var externalAddr = entry.getKey();
+                    var targetedOnlineSum = current.getRight().stream().mapToInt(k -> registry.getParams(k).onlinePlayers).sum();
+                    var targetedMaximumSum = current.getRight().stream().mapToInt(k -> registry.getParams(k).maximumPlayers).sum();
+                    PromMetrics.targetedOnlinePlayers.labels(externalAddr.toString()).set(targetedOnlineSum);
+                    PromMetrics.targetedMaximumPlayers.labels(externalAddr.toString()).set(targetedMaximumSum);
+                    PromMetrics.targetedServiceInstances.labels(externalAddr.toString()).set(current.getRight().size());
+                    PromMetrics.latestTargetedServiceInstances.labels(externalAddr.toString()).set(current.getLeft().size());
+                    for (var internalAddr: current.getRight()) {
+                        var params = registry.getParams(internalAddr);
+                        var serverName = this.cachedServerInfoMap.get(internalAddr).getName();
+                        PromMetrics.targetedServicePerTick.labels(externalAddr.toString(), serverName).set(params.tickMillis / 1000.0);
                     }
-                    for (var addr: Sets.difference(oldExternalToInternals.get(externalAddr), instances)) {
-                        var serverName = this.cachedServerInfoMap.get(addr).getName();
+                    var prev = previousTargeted.get(externalAddr);
+                    var offline = prev != null ? Sets.difference(prev.getRight(), current.getRight()) : Set.<HostAndPort>of();
+                    for (var internalAddr : offline) {
+                        var serverName = this.cachedServerInfoMap.get(internalAddr).getName();
                         PromMetrics.targetedServicePerTick.remove(externalAddr.toString(), serverName);
                     }
                 }
-                for (var externalAddr : Sets.difference(oldExternalToInternals.keySet(), newExternalToInternals.keySet())) {
+                for (var externalAddr : Sets.difference(previousTargeted.keySet(), currentTargeted.keySet())) {
                     PromMetrics.targetedOnlinePlayers.remove(externalAddr.toString());
                     PromMetrics.targetedMaximumPlayers.remove(externalAddr.toString());
                     PromMetrics.targetedServiceInstances.remove(externalAddr.toString());
                     PromMetrics.latestTargetedServiceInstances.remove(externalAddr.toString());
-                    for (var addr: oldExternalToInternals.get(externalAddr)) {
+                    var prev = previousTargeted.get(externalAddr);
+                    var offline = prev != null ? prev.getRight() : Set.<HostAndPort>of();
+                    for (var addr : offline) {
                         var serverName = this.cachedServerInfoMap.get(addr).getName();
                         PromMetrics.targetedServicePerTick.remove(externalAddr.toString(), serverName);
                     }
@@ -426,7 +385,7 @@ public final class GongdaobeiBungee extends Plugin {
         @EventHandler
         public void on(ServerDisconnectEvent event) {
             GongdaobeiUtil.getHostAndPort(event.getTarget().getName(), "gongdaobei:", true).ifPresent(addr -> {
-                var params = this.serviceParams.get().get(addr);
+                var params = this.currentRegistry.get().getParams(addr);
                 if (params != null && !params.isRetired) {
                     var playerUniqueId = event.getPlayer().getUniqueId();
                     GongdaobeiUtil.setAffinityTarget(playerUniqueId, addr, this.conn, params.affinityMillis);
@@ -438,7 +397,7 @@ public final class GongdaobeiBungee extends Plugin {
         public void on(ServerConnectEvent event) {
             var player = event.getPlayer();
             if (player != null && event.getReason() == ServerConnectEvent.Reason.JOIN_PROXY) {
-                var playerChoices = ServerEntry.from(player.getPendingConnection(), this.serviceParams.get());
+                var playerChoices = ServerEntry.from(player.getPendingConnection(), this.currentRegistry.get());
                 // if there is an affinity host which has space, send the player to that server
                 var playerUniqueId = player.getUniqueId();
                 var affinityHost = GongdaobeiUtil.getAffinityTarget(playerUniqueId, this.conn);
@@ -488,7 +447,7 @@ public final class GongdaobeiBungee extends Plugin {
         @EventHandler
         public void on(ProxyPingEvent event) {
             var limit = this.server.getConfig().getPlayerLimit();
-            var playerChoices = ServerEntry.from(event.getConnection(), this.serviceParams.get());
+            var playerChoices = ServerEntry.from(event.getConnection(), this.currentRegistry.get());
             var online = playerChoices.stream().mapToInt(p -> p.serviceParams().onlinePlayers).sum();
             var maximum = playerChoices.stream().mapToInt(p -> p.serviceParams().maximumPlayers).sum();
             var pingForgeData = this.getDefaultPingForgeData();
@@ -525,6 +484,15 @@ public final class GongdaobeiBungee extends Plugin {
             // modern forge: { "fmlNetworkVersion": 3 }
             pingForgeData.add("fmlNetworkVersion", new JsonPrimitive(3));
             return pingForgeData;
+        }
+
+        private String getOrCreateServerName(HostAndPort internalAddr, GongdaobeiServiceParams params) {
+            var info = this.cachedServerInfoMap.computeIfAbsent(internalAddr, k -> {
+                var newName = "gongdaobei:" + params.hostname + ":" + k;
+                var socket = InetSocketAddress.createUnresolved(k.getHost(), k.getPort());
+                return this.server.constructServerInfo(newName, socket, params.motd, false);
+            });
+            return info.getName();
         }
     }
 }
