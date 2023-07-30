@@ -50,6 +50,10 @@ affinityMillis = 1200000
 # Bungee 侧开启的 Prometheus Metrics 服务器端口
 # 应当为 0 和 65535 之间，如果为 0 则不开启服务器
 prometheusServerPort = 0
+# 外部地址白名单，位于白名单的外部地址
+# 将永远出现在 Prometheus Metrics 服务中
+# 同时将永远不会使玩家连接到 fallback 服务器
+externalAddressWhitelist = []
 ```
 
 ## Prometheus Metrics 服务器
