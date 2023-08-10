@@ -16,19 +16,19 @@ Forge 侧配置文件位于 `config/gongdaobei.toml`，Bungee 侧位于 `plugins
 ################################
 [common]
 # 服务发现的 redis 地址，支持 sentinel 自动切换
-# 支持 Java System Properties 解析，可通过「:-」分隔符添加默认值
-discoveryRedisUri = "${gongdaobei.service.discovery:-redis://localhost:6379/0}"
+# 支持环境变量解析，可通过「:-」分隔符添加默认值
+discoveryRedisUri = "${GONGDAOBEI_SERVICE_DISCOVERY:-redis://localhost:6379/0}"
 ################################
 # service 块配置为 forge 独有
 ################################
 [service]
 # 用于 bungee 层连接 forge 层的内部地址
 # 如未指定端口，则以 server.properties 里的端口为准
-# 支持 Java System Properties 解析，可通过「:-」分隔符添加默认值
-internalAddress = "${gongdaobei.service.internal:-localhost}"
+# 支持环境变量解析，可通过「:-」分隔符添加默认值
+internalAddress = "${GONGDAOBEI_SERVICE_INTERNEL:-localhost}"
 # 外部地址，用于玩家通过特定域名连接服务器时识别
 # 如未指定端口，则以玩家连接 bungee 侧使用的端口为准
-# 支持 Java System Properties 解析，可通过「:-」分隔符添加默认值
+# 支持环境变量解析，可通过「:-」分隔符添加默认值
 externalAddresses = []
 # 是否为 fallback 服务器
 # 如任何服务器外部地址均不满足玩家连接，玩家将选择一 fallback 服务器连接
@@ -37,9 +37,9 @@ isFallbackServer = true
 # 版本新旧决定服务器优先级（版本比较服从语义化版本定义）
 # 玩家只会连接优先级最高即版本号最新的服务器
 # 可为空字符串，若为空字符串则为无版本号服务器，优先级最低
-# 支持 Java System Properties 解析，可通过「:-」分隔符添加默认值
+# 支持环境变量解析，可通过「:-」分隔符添加默认值
 # 如以下配置支持通过 -Dgongdaobei.service.version=x.y.z 参数指定版本号
-version = "${gongdaobei.service.version:-1.0.0}"
+version = "${GONGDAOBEI_SERVICE_EXTERNEL:-1.0.0}"
 # 亲和有效时间，单位毫秒
 # 玩家在亲和有效时间内的重连时，将分配到上一个连接的服务器
 affinityMillis = 1200000

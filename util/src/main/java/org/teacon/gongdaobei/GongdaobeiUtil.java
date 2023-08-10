@@ -89,11 +89,15 @@ public final class GongdaobeiUtil {
         commands.pexpire(key, 5000L);
     }
 
+    public static HostAndPort getHostAndPortUnchecked(String input) {
+        return HostAndPort.fromString(input).requireBracketsForIPv6();
+    }
+
     public static Optional<HostAndPort> getHostAndPort(String input, String prefix, boolean checkPort) {
         try {
             Preconditions.checkArgument(input.startsWith(prefix));
-            var addr = HostAndPort.fromString(input.substring(prefix.length()));
-            Preconditions.checkArgument(addr.requireBracketsForIPv6().hasPort() || !checkPort);
+            var addr = getHostAndPortUnchecked(input.substring(prefix.length()));
+            Preconditions.checkArgument(addr.hasPort() || !checkPort);
             return Optional.of(addr);
         } catch (IllegalArgumentException e) {
             return Optional.empty();

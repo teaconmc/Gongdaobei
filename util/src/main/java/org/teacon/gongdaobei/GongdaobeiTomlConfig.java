@@ -36,9 +36,9 @@ import java.io.Reader;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
-import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
+import java.util.function.Function;
 
 public final class GongdaobeiTomlConfig {
     private static final String DISCOVERY_REDIS_URI = "discoveryRedisUri";
@@ -57,6 +57,11 @@ public final class GongdaobeiTomlConfig {
     private static final boolean DEFAULT_IS_FALLBACK_SERVER = true;
     private static final String DEFAULT_VERSION = "${gongdaobei.service.version:-1.0.0}";
     private static final long DEFAULT_AFFINITY_MILLIS = 1200000L;
+
+    private static <T> Pair<String, T> replaced(String input, Function<String, T> constructor) {
+        var lookup = StringLookupFactory.INSTANCE.environmentVariableStringLookup();
+        return Pair.of(input, constructor.apply(new StringSubstitutor(lookup).replace(input)));
+    }
 
     public static final class VersionPattern implements Comparable<VersionPattern> {
         private final @Nullable Semver semver;
@@ -121,10 +126,9 @@ public final class GongdaobeiTomlConfig {
                 var prometheusServerPort = bungee.map(t -> t.getLong(PROM_SERVER_PORT)).orElse(DEFAULT_PROM_SERVER_PORT);
                 var externalAddressWhitelist = bungee.map(t -> t.<String>getList(EXTERNAL_ADDRESS_WHITELIST)).orElse(DEFAULT_EXTERNAL_ADDRESS_WHITELIST);
                 return new Bungee(
-                        Pair.of(discoveryRedisUri, RedisURI.create(StringSubstitutor.replaceSystemProperties(discoveryRedisUri))),
+                        replaced(discoveryRedisUri, RedisURI::create),
                         Math.toIntExact(Math.min(65535L, Math.max(0L, prometheusServerPort))),
-                        externalAddressWhitelist.stream().map(a -> Pair.of(a, HostAndPort.fromString(
-                                StringSubstitutor.replaceSystemProperties(a)).requireBracketsForIPv6())).toList());
+                        externalAddressWhitelist.stream().map(a -> replaced(a, GongdaobeiUtil::getHostAndPortUnchecked)).toList());
             } catch (IOException | ClassCastException e) {
                 throw new IllegalArgumentException(e);
             }
@@ -166,14 +170,11 @@ public final class GongdaobeiTomlConfig {
                 var version = service.map(t -> t.getString(VERSION)).orElse(DEFAULT_VERSION);
                 var affinityMillis = service.map(t -> t.getLong(AFFINITY_MILLIS)).orElse(DEFAULT_AFFINITY_MILLIS);
                 return new Service(
-                        Pair.of(discoveryRedisUri, RedisURI
-                                .create(StringSubstitutor.replaceSystemProperties(discoveryRedisUri))),
-                        Pair.of(internalAddress, HostAndPort.
-                                fromString(StringSubstitutor.replaceSystemProperties(internalAddress)).requireBracketsForIPv6()),
-                        List.copyOf(externalAddresses.stream().map(a -> Pair.of(a, HostAndPort.
-                                fromString(StringSubstitutor.replaceSystemProperties(a)).requireBracketsForIPv6())).toList()),
+                        replaced(discoveryRedisUri, RedisURI::create),
+                        replaced(internalAddress, GongdaobeiUtil::getHostAndPortUnchecked),
+                        List.copyOf(externalAddresses.stream().map(a -> replaced(a, GongdaobeiUtil::getHostAndPortUnchecked)).toList()),
                         isFallbackServer,
-                        new VersionPattern(version, StringLookupFactory.INSTANCE.systemPropertyStringLookup()),
+                        new VersionPattern(version, StringLookupFactory.INSTANCE.environmentVariableStringLookup()),
                         affinityMillis);
             } catch (IOException | ClassCastException | SemverException e) {
                 throw new IllegalArgumentException(e);
