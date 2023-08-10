@@ -49,13 +49,13 @@ public final class GongdaobeiTomlConfig {
     private static final String IS_FALLBACK_SERVER = "isFallbackServer";
     private static final String VERSION = "version";
     private static final String AFFINITY_MILLIS = "affinityMillis";
-    private static final String DEFAULT_DISCOVERY_REDIS_URI = "${gongdaobei.service.discovery:-redis://localhost:6379/0}";
+    private static final String DEFAULT_DISCOVERY_REDIS_URI = "${GONGDAOBEI_SERVICE_DISCOVERY:-redis://localhost:6379/0}";
     private static final long DEFAULT_PROM_SERVER_PORT = 0L;
     private static final List<String> DEFAULT_EXTERNAL_ADDRESS_WHITELIST = List.of();
-    private static final String DEFAULT_INTERNAL_ADDRESS = "${gongdaobei.service.internal:-localhost}";
+    private static final String DEFAULT_INTERNAL_ADDRESS = "${GONGDAOBEI_SERVICE_INTERNAL:-localhost}";
     private static final List<String> DEFAULT_EXTERNAL_ADDRESSES = List.of();
     private static final boolean DEFAULT_IS_FALLBACK_SERVER = true;
-    private static final String DEFAULT_VERSION = "${gongdaobei.service.version:-1.0.0}";
+    private static final String DEFAULT_VERSION = "${GONGDAOBEI_SERVICE_VERSION:-1.0.0}";
     private static final long DEFAULT_AFFINITY_MILLIS = 1200000L;
 
     private static <T> Pair<String, T> replaced(String input, Function<String, T> constructor) {
