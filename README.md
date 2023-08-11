@@ -38,7 +38,7 @@ isFallbackServer = true
 # 玩家只会连接优先级最高即版本号最新的服务器
 # 可为空字符串，若为空字符串则为无版本号服务器，优先级最低
 # 支持环境变量解析，可通过「:-」分隔符添加默认值
-# 如以下配置支持通过 -Dgongdaobei.service.version=x.y.z 参数指定版本号
+# 如以下配置支持通过设置 GONGDAOBEI_SERVICE_VERSION 环境变量指定版本号
 version = "${GONGDAOBEI_SERVICE_VERSION:-1.0.0}"
 # 亲和有效时间，单位毫秒
 # 玩家在亲和有效时间内的重连时，将分配到上一个连接的服务器
