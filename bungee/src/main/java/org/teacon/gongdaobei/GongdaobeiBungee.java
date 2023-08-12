@@ -482,10 +482,17 @@ public final class GongdaobeiBungee extends Plugin {
         }
 
         private String getOrCreateServerName(HostAndPort internalAddr, GongdaobeiServiceParams params) {
-            var info = this.cachedServerInfoMap.computeIfAbsent(internalAddr, k -> {
+            var info = this.cachedServerInfoMap.compute(internalAddr, (k, v) -> {
                 var newName = "gongdaobei:" + params.hostname + ":" + k;
-                var socket = InetSocketAddress.createUnresolved(k.getHost(), k.getPort());
-                return this.server.constructServerInfo(newName, socket, params.motd, false);
+                if (v != null && !newName.equals(v.getName())) {
+                    this.logger.info("Unregistered bungee server info object: " + v.getName());
+                }
+                if (v == null || !newName.equals(v.getName())) {
+                    var socket = InetSocketAddress.createUnresolved(k.getHost(), k.getPort());
+                    v = this.server.constructServerInfo(newName, socket, params.motd, false);
+                    this.logger.info("Registered bungee server info object: " + v.getName());
+                }
+                return v;
             });
             return info.getName();
         }
