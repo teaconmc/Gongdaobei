@@ -18,13 +18,13 @@
 package org.teacon.gongdaobei;
 
 import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.Lists;
 import com.google.common.net.HostAndPort;
 import com.moandjiezana.toml.Toml;
 import com.moandjiezana.toml.TomlWriter;
 import com.vdurmont.semver4j.Semver;
 import com.vdurmont.semver4j.SemverException;
 import io.lettuce.core.RedisURI;
-import org.apache.commons.lang3.tuple.Pair;
 import org.apache.commons.text.StringSubstitutor;
 import org.apache.commons.text.lookup.StringLookup;
 import org.apache.commons.text.lookup.StringLookupFactory;
@@ -38,10 +38,9 @@ import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.List;
 import java.util.Optional;
-import java.util.function.Function;
 
 public final class GongdaobeiTomlConfig {
-    private static final String DISCOVERY_REDIS_URI = "discoveryRedisUri";
+    private static final String DISCOVERY_REDIS = "discoveryRedisUri";
     private static final String PROM_SERVER_PORT = "prometheusServerPort";
     private static final String EXTERNAL_ADDRESS_WHITELIST = "externalAddressWhitelist";
     private static final String INTERNAL_ADDRESS = "internalAddress";
@@ -49,7 +48,7 @@ public final class GongdaobeiTomlConfig {
     private static final String IS_FALLBACK_SERVER = "isFallbackServer";
     private static final String VERSION = "version";
     private static final String AFFINITY_MILLIS = "affinityMillis";
-    private static final String DEFAULT_DISCOVERY_REDIS_URI = "${GONGDAOBEI_SERVICE_DISCOVERY:-redis://localhost:6379/0}";
+    private static final String DEFAULT_DISCOVERY_REDIS = "${GONGDAOBEI_SERVICE_DISCOVERY:-redis://localhost:6379/0}";
     private static final long DEFAULT_PROM_SERVER_PORT = 0L;
     private static final List<String> DEFAULT_EXTERNAL_ADDRESS_WHITELIST = List.of();
     private static final String DEFAULT_INTERNAL_ADDRESS = "${GONGDAOBEI_SERVICE_INTERNAL:-localhost}";
@@ -58,9 +57,42 @@ public final class GongdaobeiTomlConfig {
     private static final String DEFAULT_VERSION = "${GONGDAOBEI_SERVICE_VERSION:-1.0.0}";
     private static final long DEFAULT_AFFINITY_MILLIS = 1200000L;
 
-    private static <T> Pair<String, T> replaced(String input, Function<String, T> constructor) {
-        var lookup = StringLookupFactory.INSTANCE.environmentVariableStringLookup();
-        return Pair.of(input, constructor.apply(new StringSubstitutor(lookup).replace(input)));
+    public static final class RedisLocationPattern {
+        private final RedisURI object;
+        private final String pattern;
+
+        public RedisLocationPattern(String pattern) {
+            this.object = RedisURI.create(pattern);
+            this.pattern = pattern;
+        }
+
+        public RedisURI getValue() {
+            return this.object;
+        }
+
+        @Override
+        public String toString() {
+            return this.pattern;
+        }
+    }
+
+    public static final class AddressPattern {
+        private final HostAndPort object;
+        private final String pattern;
+
+        public AddressPattern(String pattern) {
+            this.object = GongdaobeiUtil.getHostAndPortUnchecked(pattern);
+            this.pattern = pattern;
+        }
+
+        public HostAndPort getValue() {
+            return this.object;
+        }
+
+        @Override
+        public String toString() {
+            return this.pattern;
+        }
     }
 
     public static final class VersionPattern implements Comparable<VersionPattern> {
@@ -82,7 +114,8 @@ public final class GongdaobeiTomlConfig {
         }
 
         public VersionPattern resolve() {
-            return new VersionPattern(this.semver == null ? "" : this.semver.toString(), StringLookupFactory.INSTANCE.nullStringLookup());
+            var lookup = StringLookupFactory.INSTANCE.nullStringLookup();
+            return new VersionPattern(this.semver == null ? "" : this.semver.toString(), lookup);
         }
 
         @Override
@@ -100,16 +133,17 @@ public final class GongdaobeiTomlConfig {
         }
     }
 
-    public record Bungee(Pair<String, RedisURI> discoveryRedisUri,
+    public record Bungee(RedisLocationPattern discoveryRedisUri,
                          int prometheusServerPort,
-                         List<Pair<String, HostAndPort>> externalAddressWhitelist) {
+                         List<AddressPattern> externalAddresses) {
         public Bungee save(Path configFile) {
             try (var output = Files.newBufferedWriter(configFile, StandardOpenOption.CREATE)) {
                 var toml = new TomlWriter.Builder().indentTablesBy(0).indentValuesBy(0).build();
-                var common = ImmutableMap.of(DISCOVERY_REDIS_URI, this.discoveryRedisUri.getKey());
+                var common = ImmutableMap.of(
+                        DISCOVERY_REDIS, this.discoveryRedisUri.toString());
                 var bungee = ImmutableMap.of(
                         PROM_SERVER_PORT, this.prometheusServerPort,
-                        EXTERNAL_ADDRESS_WHITELIST, this.externalAddressWhitelist.stream().map(Pair::getKey).toList());
+                        EXTERNAL_ADDRESS_WHITELIST, Lists.transform(this.externalAddresses, AddressPattern::toString));
                 toml.write(ImmutableMap.of("common", common, "bungee", bungee), output);
                 return this;
             } catch (IOException | ClassCastException e) {
@@ -122,32 +156,36 @@ public final class GongdaobeiTomlConfig {
                 var toml = new Toml().read(input);
                 var common = Optional.ofNullable(toml.getTable("common"));
                 var bungee = Optional.ofNullable(toml.getTable("bungee"));
-                var discoveryRedisUri = common.map(t -> t.getString(DISCOVERY_REDIS_URI)).orElse(DEFAULT_DISCOVERY_REDIS_URI).strip();
-                var prometheusServerPort = bungee.map(t -> t.getLong(PROM_SERVER_PORT)).orElse(DEFAULT_PROM_SERVER_PORT);
-                var externalAddressWhitelist = bungee.map(t -> t.<String>getList(EXTERNAL_ADDRESS_WHITELIST)).orElse(DEFAULT_EXTERNAL_ADDRESS_WHITELIST);
+                var discoveryRedisUri = common
+                        .map(t -> t.getString(DISCOVERY_REDIS)).orElse(DEFAULT_DISCOVERY_REDIS).strip();
+                var prometheusServerPort = bungee
+                        .map(t -> t.getLong(PROM_SERVER_PORT)).orElse(DEFAULT_PROM_SERVER_PORT);
+                var externalAddresses = bungee
+                        .map(t -> t.<String>getList(EXTERNAL_ADDRESS_WHITELIST)).orElse(DEFAULT_EXTERNAL_ADDRESS_WHITELIST);
                 return new Bungee(
-                        replaced(discoveryRedisUri, RedisURI::create),
+                        new RedisLocationPattern(discoveryRedisUri),
                         Math.toIntExact(Math.min(65535L, Math.max(0L, prometheusServerPort))),
-                        externalAddressWhitelist.stream().map(a -> replaced(a, GongdaobeiUtil::getHostAndPortUnchecked)).toList());
+                        List.of(externalAddresses.stream().map(AddressPattern::new).toArray(AddressPattern[]::new)));
             } catch (IOException | ClassCastException e) {
                 throw new IllegalArgumentException(e);
             }
         }
     }
 
-    public record Service(Pair<String, RedisURI> discoveryRedisUri,
-                          Pair<String, HostAndPort> internalAddress,
-                          List<Pair<String, HostAndPort>> externalAddresses,
+    public record Service(RedisLocationPattern discoveryRedisUri,
+                          AddressPattern internalAddress,
+                          List<AddressPattern> externalAddresses,
                           boolean isFallbackServer,
                           VersionPattern version,
                           long affinityMillis) {
         public Service save(Path configFile) {
             try (var output = Files.newBufferedWriter(configFile, StandardOpenOption.CREATE)) {
                 var toml = new TomlWriter.Builder().indentTablesBy(0).indentValuesBy(0).build();
-                var common = ImmutableMap.of(DISCOVERY_REDIS_URI, this.discoveryRedisUri.getKey());
+                var common = ImmutableMap.of(
+                        DISCOVERY_REDIS, this.discoveryRedisUri.toString());
                 var service = ImmutableMap.of(
-                        INTERNAL_ADDRESS, this.internalAddress.getValue().toString(),
-                        EXTERNAL_ADDRESSES, this.externalAddresses.stream().map(p -> p.getValue().toString()).toList(),
+                        INTERNAL_ADDRESS, this.internalAddress.toString(),
+                        EXTERNAL_ADDRESSES, Lists.transform(this.externalAddresses, AddressPattern::toString),
                         IS_FALLBACK_SERVER, this.isFallbackServer,
                         VERSION, this.version.toString(),
                         AFFINITY_MILLIS, this.affinityMillis);
@@ -163,16 +201,22 @@ public final class GongdaobeiTomlConfig {
                 var toml = new Toml().read(input);
                 var common = Optional.ofNullable(toml.getTable("common"));
                 var service = Optional.ofNullable(toml.getTable("service"));
-                var discoveryRedisUri = common.map(t -> t.getString(DISCOVERY_REDIS_URI)).orElse(DEFAULT_DISCOVERY_REDIS_URI).strip();
-                var internalAddress = service.map(t -> t.getString(INTERNAL_ADDRESS)).orElse(DEFAULT_INTERNAL_ADDRESS);
-                var externalAddresses = service.map(t -> t.<String>getList(EXTERNAL_ADDRESSES)).orElse(DEFAULT_EXTERNAL_ADDRESSES);
-                var isFallbackServer = service.map(t -> t.getBoolean(IS_FALLBACK_SERVER)).orElse(DEFAULT_IS_FALLBACK_SERVER);
-                var version = service.map(t -> t.getString(VERSION)).orElse(DEFAULT_VERSION);
-                var affinityMillis = service.map(t -> t.getLong(AFFINITY_MILLIS)).orElse(DEFAULT_AFFINITY_MILLIS);
+                var discoveryRedisUri = common
+                        .map(t -> t.getString(DISCOVERY_REDIS)).orElse(DEFAULT_DISCOVERY_REDIS).strip();
+                var internalAddress = service
+                        .map(t -> t.getString(INTERNAL_ADDRESS)).orElse(DEFAULT_INTERNAL_ADDRESS);
+                var externalAddresses = service
+                        .map(t -> t.<String>getList(EXTERNAL_ADDRESSES)).orElse(DEFAULT_EXTERNAL_ADDRESSES);
+                var isFallbackServer = service
+                        .map(t -> t.getBoolean(IS_FALLBACK_SERVER)).orElse(DEFAULT_IS_FALLBACK_SERVER);
+                var version = service
+                        .map(t -> t.getString(VERSION)).orElse(DEFAULT_VERSION);
+                var affinityMillis = service
+                        .map(t -> t.getLong(AFFINITY_MILLIS)).orElse(DEFAULT_AFFINITY_MILLIS);
                 return new Service(
-                        replaced(discoveryRedisUri, RedisURI::create),
-                        replaced(internalAddress, GongdaobeiUtil::getHostAndPortUnchecked),
-                        List.copyOf(externalAddresses.stream().map(a -> replaced(a, GongdaobeiUtil::getHostAndPortUnchecked)).toList()),
+                        new RedisLocationPattern(discoveryRedisUri),
+                        new AddressPattern(internalAddress),
+                        List.of(externalAddresses.stream().map(AddressPattern::new).toArray(AddressPattern[]::new)),
                         isFallbackServer,
                         new VersionPattern(version, StringLookupFactory.INSTANCE.environmentVariableStringLookup()),
                         affinityMillis);

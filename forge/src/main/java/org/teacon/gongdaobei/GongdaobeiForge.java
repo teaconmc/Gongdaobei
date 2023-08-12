@@ -37,7 +37,6 @@ import net.minecraftforge.fml.loading.FMLPaths;
 import net.minecraftforge.network.NetworkConstants;
 import net.minecraftforge.network.ServerStatusPing;
 import org.apache.commons.lang3.StringUtils;
-import org.apache.commons.lang3.tuple.Pair;
 import org.slf4j.Logger;
 
 import java.io.Closeable;
@@ -68,11 +67,12 @@ public final class GongdaobeiForge {
             var confFile = FMLPaths.CONFIGDIR.get().resolve(Path.of("gongdaobei.toml"));
             this.config = GongdaobeiTomlConfig.Service.load(confFile).save(confFile);
             LOGGER.info("- Discovery Redis URI: {} (resolved from {})",
-                    GongdaobeiUtil.desensitizeRedisUri(this.config.discoveryRedisUri().getValue()), this.config.discoveryRedisUri().getKey());
+                    GongdaobeiUtil.desensitizeRedisUri(this.config.discoveryRedisUri().getValue()), this.config.discoveryRedisUri().toString());
             LOGGER.info("- Internal Address: {} (resolved from {})",
-                    this.config.internalAddress().getValue(), this.config.internalAddress().getKey());
+                    this.config.internalAddress().getValue(), this.config.internalAddress());
             LOGGER.info("- External Addresses: {} (resolved from {})",
-                    this.config.externalAddresses().stream().map(Pair::getValue).toList(), this.config.externalAddresses().stream().map(Pair::getKey).toList());
+                    this.config.externalAddresses().stream().map(GongdaobeiTomlConfig.AddressPattern::getValue).toList(),
+                    this.config.externalAddresses().stream().map(GongdaobeiTomlConfig.AddressPattern::toString).toList());
             LOGGER.info("- Is Fallback Server: {}",
                     this.config.isFallbackServer() ? "TRUE" : "FALSE");
             LOGGER.info("- Version: {} (resolved from {})",

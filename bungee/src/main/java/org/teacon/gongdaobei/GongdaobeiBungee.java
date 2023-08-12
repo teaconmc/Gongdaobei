@@ -75,7 +75,7 @@ public final class GongdaobeiBungee extends Plugin {
         this.config = GongdaobeiTomlConfig.Bungee.load(file).save(file);
         this.getLogger().info("- Discovery Redis URI: " +
                 GongdaobeiUtil.desensitizeRedisUri(this.config.discoveryRedisUri().getValue()) +
-                " (resolved from " + this.config.discoveryRedisUri().getKey() + ")");
+                " (resolved from " + this.config.discoveryRedisUri().toString() + ")");
         this.handler = new Handler(this, this.config);
     }
 
@@ -240,7 +240,7 @@ public final class GongdaobeiBungee extends Plugin {
             this.server = plugin.getProxy();
             this.redisClient = RedisClient.create();
             this.redisClient.setOptions(GongdaobeiUtil.getRedisClientOptions());
-            this.externalAddressWhitelist = config.externalAddressWhitelist().stream().map(Pair::getValue).collect(Collectors.toSet());
+            this.externalAddressWhitelist = config.externalAddresses().stream().map(GongdaobeiTomlConfig.AddressPattern::getValue).collect(Collectors.toSet());
             this.conn = MasterReplica.connectAsync(
                     this.redisClient, StringCodec.UTF8, config.discoveryRedisUri().getValue()).whenComplete((c, e) -> {
                 var uri = GongdaobeiUtil.desensitizeRedisUri(config.discoveryRedisUri().getValue());
@@ -259,6 +259,7 @@ public final class GongdaobeiBungee extends Plugin {
             var httpServerPort = config.prometheusServerPort();
             if (httpServerPort > 0) {
                 try {
+                    // noinspection resource
                     var httpServer = new HTTPServer.Builder().withPort(httpServerPort).build();
                     this.logger.info("Launched the prometheus server at port " + httpServerPort);
                     prometheusCloseCallback = httpServer::close;

@@ -21,7 +21,6 @@ import com.google.common.net.HostAndPort;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonElement;
-import org.apache.commons.lang3.tuple.Pair;
 import org.apache.commons.text.lookup.StringLookupFactory;
 
 import java.util.Arrays;
@@ -67,7 +66,7 @@ public final class GongdaobeiServiceParams {
         this.hostname = hostname;
         this.isFallback = config.isFallbackServer();
         this.externalAddresses = List.of(config.externalAddresses()
-                .stream().map(Pair::getValue).toArray(HostAndPort[]::new));
+                .stream().map(GongdaobeiTomlConfig.AddressPattern::getValue).toArray(HostAndPort[]::new));
         this.motd = motd;
         this.version = config.version().resolve();
         this.affinityMillis = config.affinityMillis();
