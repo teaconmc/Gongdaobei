@@ -4,7 +4,7 @@ plugins {
     id 'com.github.johnrengelman.shadow' version '7.1.2'
 }
 
-version = '1.4.1'
+version = '1.4.2'
 group = 'org.teacon'
 archivesBaseName = 'Gongdaobei-Universal-1.20'
 
@@ -60,6 +60,8 @@ shadowJar {
     relocate 'com.moandjiezana.toml', 'org.teacon.gongdaobei.toml'
     relocate 'com.vdurmont.semver4j', 'org.teacon.gongdaobei.semver4j'
     relocate 'org.reactivestreams', 'org.teacon.gongdaobei.reactivestreams'
+
+    mergeServiceFiles()
 }
 
 jar.enabled = false
