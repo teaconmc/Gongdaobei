@@ -170,24 +170,27 @@ public final class GongdaobeiBungee extends Plugin {
             var targetedExternals = new LinkedHashSet<HostAndPort>();
             var playerExternalAddr = connection.getVirtualHost();
             if (playerExternalAddr != null) {
-                var addr = HostAndPort.fromString(playerExternalAddr.getHostString());
-                if (registry.getTargetedExternalAddrOnline().contains(addr)) {
-                    targetedExternals.add(addr);
-                }
-                addr = HostAndPort.fromParts(playerExternalAddr.getHostString(), playerExternalAddr.getPort());
-                if (registry.getTargetedExternalAddrOnline().contains(addr)) {
-                    targetedExternals.add(addr);
+                for (var addr : registry.getTargetedExternalAddrOnline()) {
+                    var sameHost = addr.getHost().equals(playerExternalAddr.getHostString());
+                    var samePort = !addr.hasPort() || addr.getPort() == playerExternalAddr.getPort();
+                    if (sameHost && samePort) {
+                        targetedExternals.add(addr);
+                    }
                 }
             }
+            return from(targetedExternals, registry);
+        }
+
+        private static List<ServerEntry> from(Collection<HostAndPort> externals, GongdaobeiRegistry registry) {
             var result = new ArrayList<ServerEntry>();
-            if (targetedExternals.isEmpty()) {
+            if (externals.isEmpty()) {
                 var fallbackInternals = registry.getFallbackInternalAddrOnline(true);
                 for (var internalAddr : fallbackInternals) {
                     var params = registry.getParams(internalAddr);
                     result.add(new ServerEntry(false, true, internalAddr, params));
                 }
             } else {
-                for (var externalAddr: targetedExternals) {
+                for (var externalAddr: externals) {
                     var targetedInternals = registry.getTargetedInternalAddrOnline(externalAddr, true);
                     for (var internalAddr : targetedInternals) {
                         var params = registry.getParams(internalAddr);
@@ -301,7 +304,7 @@ public final class GongdaobeiBungee extends Plugin {
             var retiredServices = Sets.intersection(offlineServices, registry.getInternalAddrRetired());
             var missingServices = Sets.difference(offlineServices, registry.getInternalAddrRetired());
             // add logs for changes
-            if (missingServices.size() > 0) {
+            if (!missingServices.isEmpty()) {
                 this.logger.warning("Registered service status changed at update " + index + " (retired: " +
                         retiredServices + ", joining: " + joiningServices + ", missing: " + missingServices + ")");
             } else if (joiningServices.size() + retiredServices.size() > 0) {
