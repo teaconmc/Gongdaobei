@@ -61,8 +61,8 @@ public final class GongdaobeiTomlConfig {
         private final RedisURI object;
         private final String pattern;
 
-        public RedisLocationPattern(String pattern) {
-            this.object = RedisURI.create(pattern);
+        public RedisLocationPattern(String pattern, StringLookup lookup) {
+            this.object = RedisURI.create(new StringSubstitutor(lookup).replace(pattern).strip());
             this.pattern = pattern;
         }
 
@@ -80,8 +80,8 @@ public final class GongdaobeiTomlConfig {
         private final HostAndPort object;
         private final String pattern;
 
-        public AddressPattern(String pattern) {
-            this.object = GongdaobeiUtil.getHostAndPortUnchecked(pattern);
+        public AddressPattern(String pattern, StringLookup lookup) {
+            this.object = GongdaobeiUtil.getHostAndPortUnchecked(new StringSubstitutor(lookup).replace(pattern).strip());
             this.pattern = pattern;
         }
 
@@ -162,10 +162,11 @@ public final class GongdaobeiTomlConfig {
                         .map(t -> t.getLong(PROM_SERVER_PORT)).orElse(DEFAULT_PROM_SERVER_PORT);
                 var externalAddresses = bungee
                         .map(t -> t.<String>getList(EXTERNAL_ADDRESS_WHITELIST)).orElse(DEFAULT_EXTERNAL_ADDRESS_WHITELIST);
+                var lookup = StringLookupFactory.INSTANCE.environmentVariableStringLookup();
                 return new Bungee(
-                        new RedisLocationPattern(discoveryRedisUri),
+                        new RedisLocationPattern(discoveryRedisUri, lookup),
                         Math.toIntExact(Math.min(65535L, Math.max(0L, prometheusServerPort))),
-                        List.of(externalAddresses.stream().map(AddressPattern::new).toArray(AddressPattern[]::new)));
+                        List.of(externalAddresses.stream().map(p -> new AddressPattern(p, lookup)).toArray(AddressPattern[]::new)));
             } catch (IOException | ClassCastException e) {
                 throw new IllegalArgumentException(e);
             }
@@ -213,12 +214,13 @@ public final class GongdaobeiTomlConfig {
                         .map(t -> t.getString(VERSION)).orElse(DEFAULT_VERSION);
                 var affinityMillis = service
                         .map(t -> t.getLong(AFFINITY_MILLIS)).orElse(DEFAULT_AFFINITY_MILLIS);
+                var lookup = StringLookupFactory.INSTANCE.environmentVariableStringLookup();
                 return new Service(
-                        new RedisLocationPattern(discoveryRedisUri),
-                        new AddressPattern(internalAddress),
-                        List.of(externalAddresses.stream().map(AddressPattern::new).toArray(AddressPattern[]::new)),
+                        new RedisLocationPattern(discoveryRedisUri, lookup),
+                        new AddressPattern(internalAddress, lookup),
+                        List.of(externalAddresses.stream().map(p -> new AddressPattern(p, lookup)).toArray(AddressPattern[]::new)),
                         isFallbackServer,
-                        new VersionPattern(version, StringLookupFactory.INSTANCE.environmentVariableStringLookup()),
+                        new VersionPattern(version, lookup),
                         affinityMillis);
             } catch (IOException | ClassCastException | SemverException e) {
                 throw new IllegalArgumentException(e);
