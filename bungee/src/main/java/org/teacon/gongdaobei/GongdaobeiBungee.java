@@ -426,7 +426,7 @@ public final class GongdaobeiBungee extends Plugin {
                 var iterator = playerChoices.stream().iterator();
                 for (var i = 0; i < online.length; ++i) {
                     var next = iterator.next();
-                    random -= weights[i];
+                    random -= weights[i] * weights[i];
                     if (random < 0.0) {
                         this.logger.info("Load balancing performed, send the player to the target or " +
                                 "fallback server (" + next.internalAddress() + ", choices: " + playerChoices + ")");
