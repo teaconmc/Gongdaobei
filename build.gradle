@@ -4,7 +4,7 @@ plugins {
     id 'com.github.johnrengelman.shadow' version '7.1.2'
 }
 
-version = '1.4.5'
+version = '1.5.0'
 group = 'org.teacon'
 archivesBaseName = 'Gongdaobei-Universal-1.20'
 
