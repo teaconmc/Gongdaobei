@@ -492,11 +492,13 @@ public final class GongdaobeiBungee extends Plugin {
                 var newName = "gongdaobei:" + params.hostname + ":" + k;
                 if (v != null && !newName.equals(v.getName())) {
                     this.logger.info("Unregistered bungee server info object: " + v.getName());
+                    this.server.getConfig().removeServer(v);
                 }
                 if (v == null || !newName.equals(v.getName())) {
                     var socket = InetSocketAddress.createUnresolved(k.getHost(), k.getPort());
                     v = this.server.constructServerInfo(newName, socket, params.motd, false);
                     this.logger.info("Registered bungee server info object: " + v.getName());
+                    this.server.getConfig().addServer(v);
                 }
                 return v;
             });
