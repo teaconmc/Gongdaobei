@@ -397,6 +397,7 @@ public final class GongdaobeiBungee extends Plugin {
             if (player != null && event.getReason() == ServerConnectEvent.Reason.JOIN_PROXY) {
                 var playerChoices = ServerEntry.from(player.getPendingConnection(), this.currentRegistry.get());
                 // if there is an affinity host which has space, send the player to that server
+                var playerName = player.getDisplayName();
                 var playerUniqueId = player.getUniqueId();
                 var affinityHost = GongdaobeiUtil.getAffinityTarget(playerUniqueId, this.conn);
                 var affinityParams = playerChoices.stream()
@@ -405,7 +406,8 @@ public final class GongdaobeiBungee extends Plugin {
                     var online = affinityParams.get().serviceParams().onlinePlayers;
                     var maximum = affinityParams.get().serviceParams().maximumPlayers;
                     if (online < maximum) {
-                        this.logger.info("Affinity server found, send the player to the " +
+                        this.logger.info("Affinity server found, send " +
+                                playerName + " (" + playerUniqueId + ") to the " +
                                 "affinity server (" + affinityHost.get() + ", choices: " + playerChoices + ")");
                         event.setTarget(this.cachedServerInfoMap.get(affinityHost.get()));
                         PromMetrics.totalLoginsWithAffinity.inc();
@@ -428,8 +430,9 @@ public final class GongdaobeiBungee extends Plugin {
                     var next = iterator.next();
                     random -= weights[i] * weights[i];
                     if (random < 0.0) {
-                        this.logger.info("Load balancing performed, send the player to the target or " +
-                                "fallback server (" + next.internalAddress() + ", choices: " + playerChoices + ")");
+                        this.logger.info("Load balancing performed, send " + playerName + " " +
+                                "(" + playerUniqueId + ") to the target or the fallback server " +
+                                "(" + next.internalAddress() + ", choices: " + playerChoices + ")");
                         event.setTarget(this.cachedServerInfoMap.get(next.internalAddress()));
                         PromMetrics.totalLogins.inc();
                         return;
@@ -437,7 +440,7 @@ public final class GongdaobeiBungee extends Plugin {
                 }
                 // if there is no choice (such that all the choices are full), disconnect
                 player.disconnect(TextComponent.fromLegacyText(this.server.getTranslation("proxy_full")));
-                this.logger.warning("No choice found, throw the player outside");
+                this.logger.warning("No choice found, throw " + playerName + " (" + playerUniqueId + ") outside");
                 event.setCancelled(true);
             }
         }
