@@ -94,11 +94,10 @@ artifacts {
 publishing {
     publications {
         register('release', MavenPublication) {
-            // noinspection GroovyAssignabilityCheck
-            from components.java
+            artifact shadowJar
             version = mod_version
             groupId = mod_group_id
-            artifactId = "$mod_github_repo-NeoForge-$minecraft_version"
+            artifactId = "$mod_github_repo-Universal-$minecraft_version"
             pom {
                 name = mod_github_repo
                 url = "https://github.com/$mod_github_owner/$mod_github_repo"
