@@ -11,4 +11,4 @@ plugins {
 
 rootProject.name = 'Gongdaobei'
 
-include 'util', 'forge', 'bungee'
+include 'util', 'velocity', 'neoforge'

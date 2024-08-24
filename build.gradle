@@ -1,16 +1,20 @@
 plugins {
     id 'java'
     id 'maven-publish'
-    id 'com.github.johnrengelman.shadow' version '7.1.2'
+    id 'com.gradleup.shadow' version '8.3.0'
 }
 
-version = '1.5.0'
-group = 'org.teacon'
-archivesBaseName = 'Gongdaobei-Universal-1.20'
+tasks.named('wrapper', Wrapper).configure {
+    // Define wrapper values here so as to not have to always do so when updating gradlew.properties.
+    // Switching this to Wrapper.DistributionType.ALL will download the full gradle sources that comes with
+    // documentation attached on cursor hover of gradle classes and methods. However, this comes with increased
+    // file size for Gradle. If you do switch this to ALL, run the Gradle wrapper task twice afterwards.
+    // (Verify by checking gradle/wrapper/gradle-wrapper.properties to see if distributionUrl now points to `-all`)
+    distributionType = Wrapper.DistributionType.BIN
+}
 
-java.toolchain.languageVersion.set(JavaLanguageVersion.of(17))
-
-println "Java: ${System.getProperty 'java.version'}, JVM: ${System.getProperty 'java.vm.version'} (${System.getProperty 'java.vendor'}), Arch: ${System.getProperty 'os.arch'}"
+group = mod_group_id
+version = mod_version
 
 configurations.register('universalClasspath') {
     canBeConsumed = false
@@ -18,13 +22,30 @@ configurations.register('universalClasspath') {
 }
 
 repositories {
+    mavenLocal()
     mavenCentral()
+    maven {
+        name "JitPack"
+        url 'https://jitpack.io'
+    }
+    maven {
+        name "Modrinth"
+        url "https://api.modrinth.com/maven"
+    }
 }
+
+base {
+    // Modified by TeaCon
+    archivesName = "$mod_github_repo-Universal-$minecraft_version"
+}
+
+// Mojang ships Java 21 to end users starting in 1.20.5, so mods should target Java 21.
+java.toolchain.languageVersion = JavaLanguageVersion.of(21)
 
 dependencies {
     universalClasspath project(path: ':util', configuration: 'utilJar')
-    universalClasspath project(path: ':forge', configuration: 'forgeJar')
-    universalClasspath project(path: ':bungee', configuration: 'bungeeJar')
+    universalClasspath project(path: ':velocity', configuration: 'velocityJar')
+    universalClasspath project(path: ':neoforge', configuration: 'neoForgeJar')
     shadow 'com.vdurmont:semver4j:3.1.0'
     shadow 'com.moandjiezana.toml:toml4j:0.7.2'
     shadow 'io.lettuce:lettuce-core:6.2.4.RELEASE'
@@ -72,23 +93,38 @@ artifacts {
 
 publishing {
     publications {
-        release(MavenPublication) {
-            artifactId = "Gongdaobei-Universal-1.20"
-            artifact shadowJar
+        register('release', MavenPublication) {
+            // noinspection GroovyAssignabilityCheck
+            from components.java
+            version = mod_version
+            groupId = mod_group_id
+            artifactId = "$mod_github_repo-NeoForge-$minecraft_version"
             pom {
-                name = "Gongdaobei Universal 1.20"
-                description = "Gongdaobei: Service discovery and registration"
+                name = mod_github_repo
+                url = "https://github.com/$mod_github_owner/$mod_github_repo"
                 licenses {
                     license {
-                        name = "LGPL-3.0"
-                        url = "https://www.gnu.org/licenses/lgpl-3.0.html"
+                        name = mod_license
+                        url = "https://github.com/$mod_github_owner/$mod_github_repo/blob/HEAD/LICENSE"
                     }
                 }
+                organization {
+                    name = 'TeaConMC'
+                    url = 'https://github.com/teaconmc'
+                }
                 developers {
-                    developer {
-                        id = "TeaConMC"
-                        name = "TeaConMC"
+                    for (mod_author in "$mod_authors".split(',')) {
+                        developer { id = mod_author.trim(); name = mod_author.trim() }
                     }
+                }
+                issueManagement {
+                    system = 'GitHub Issues'
+                    url = "https://github.com/$mod_github_owner/$mod_github_repo/issues"
+                }
+                scm {
+                    url = "https://github.com/$mod_github_owner/$mod_github_repo"
+                    connection = "scm:git:git://github.com/$mod_github_owner/${mod_github_repo}.git"
+                    developerConnection = "scm:git:git@github.com:$mod_github_owner/${mod_github_repo}.git"
                 }
             }
         }

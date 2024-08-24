@@ -133,37 +133,37 @@ public final class GongdaobeiTomlConfig {
         }
     }
 
-    public record Bungee(RedisLocationPattern discoveryRedisUri,
-                         int prometheusServerPort,
-                         List<AddressPattern> externalAddresses) {
-        public Bungee save(Path configFile) {
+    public record Velocity(RedisLocationPattern discoveryRedisUri,
+                           int prometheusServerPort,
+                           List<AddressPattern> externalAddresses) {
+        public Velocity save(Path configFile) {
             try (var output = Files.newBufferedWriter(configFile, StandardOpenOption.CREATE)) {
                 var toml = new TomlWriter.Builder().indentTablesBy(0).indentValuesBy(0).build();
                 var common = ImmutableMap.of(
                         DISCOVERY_REDIS, this.discoveryRedisUri.toString());
-                var bungee = ImmutableMap.of(
+                var velocity = ImmutableMap.of(
                         PROM_SERVER_PORT, this.prometheusServerPort,
                         EXTERNAL_ADDRESS_WHITELIST, Lists.transform(this.externalAddresses, AddressPattern::toString));
-                toml.write(ImmutableMap.of("common", common, "bungee", bungee), output);
+                toml.write(ImmutableMap.of("common", common, "velocity", velocity), output);
                 return this;
             } catch (IOException | ClassCastException e) {
                 throw new IllegalArgumentException(e);
             }
         }
 
-        public static Bungee load(Path configFile) {
+        public static Velocity load(Path configFile) {
             try (var input = Files.exists(configFile) ? Files.newBufferedReader(configFile) : Reader.nullReader()) {
                 var toml = new Toml().read(input);
                 var common = Optional.ofNullable(toml.getTable("common"));
-                var bungee = Optional.ofNullable(toml.getTable("bungee"));
+                var velocity = Optional.ofNullable(toml.getTable("velocity"));
                 var discoveryRedisUri = common
                         .map(t -> t.getString(DISCOVERY_REDIS)).orElse(DEFAULT_DISCOVERY_REDIS).strip();
-                var prometheusServerPort = bungee
+                var prometheusServerPort = velocity
                         .map(t -> t.getLong(PROM_SERVER_PORT)).orElse(DEFAULT_PROM_SERVER_PORT);
-                var externalAddresses = bungee
+                var externalAddresses = velocity
                         .map(t -> t.<String>getList(EXTERNAL_ADDRESS_WHITELIST)).orElse(DEFAULT_EXTERNAL_ADDRESS_WHITELIST);
                 var lookup = StringLookupFactory.INSTANCE.environmentVariableStringLookup();
-                return new Bungee(
+                return new Velocity(
                         new RedisLocationPattern(discoveryRedisUri, lookup),
                         Math.toIntExact(Math.min(65535L, Math.max(0L, prometheusServerPort))),
                         List.of(externalAddresses.stream().map(p -> new AddressPattern(p, lookup)).toArray(AddressPattern[]::new)));

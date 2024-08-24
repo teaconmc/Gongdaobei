@@ -1,6 +1,6 @@
 # Gongdaobei
 
-Gongdaobei（公道杯）：Waterfall 分服服务发现 & 负载均衡。
+Gongdaobei（公道杯）：Velocity 分服服务发现 & 负载均衡。
 
 > 茶海又称茶盅或公道杯。茶壶内之茶汤浸泡至适当浓度后，茶汤倒至茶海，再分倒于各小茶杯内，以求茶汤浓度之均匀。亦可于茶海上覆一滤网，以滤去茶渣、茶末。没有专用的茶海时，也可以用茶壶充当。其大致功用为：盛放泡好之茶汤，再分倒各杯，使各杯茶汤浓度相若，沉淀茶渣。
 > 
@@ -8,26 +8,26 @@ Gongdaobei（公道杯）：Waterfall 分服服务发现 & 负载均衡。
 
 ## 配置文件
 
-Forge 侧配置文件位于 `config/gongdaobei.toml`，Waterfall 侧位于 `plugins/Gongdaobei/gongdaobei.toml`。
+NeoForge 侧配置文件位于 `config/gongdaobei.toml`，Velocity 侧位于 `plugins/Gongdaobei/gongdaobei.toml`。
 
 ```toml
 ################################
-# common 块配置为 Forge / Waterfall 共用
+# common 块配置为 NeoForge / Velocity 共用
 ################################
 [common]
 # 服务发现的 redis 地址，支持 sentinel 自动切换
 # 支持环境变量解析，可通过「:-」分隔符添加默认值
 discoveryRedisUri = "${GONGDAOBEI_SERVICE_DISCOVERY:-redis://localhost:6379/0}"
 ################################
-# service 块配置为 forge 独有
+# service 块配置为 NeoForge 独有
 ################################
 [service]
-# 用于 Waterfall 层连接 Forge 层的内部地址
+# 用于 Velocity 层连接 NeoForge 层的内部地址
 # 如未指定端口，则以 server.properties 里的端口为准
 # 支持环境变量解析，可通过「:-」分隔符添加默认值
 internalAddress = "${GONGDAOBEI_SERVICE_INTERNAL:-localhost}"
 # 外部地址，用于玩家通过特定域名连接服务器时识别
-# 如未指定端口，则以玩家连接 Waterfall 侧使用的端口为准
+# 如未指定端口，则以玩家连接 Velocity 侧使用的端口为准
 # 支持环境变量解析，可通过「:-」分隔符添加默认值
 externalAddresses = []
 # 是否为 fallback 服务器
@@ -44,10 +44,10 @@ version = "${GONGDAOBEI_SERVICE_VERSION:-1.0.0}"
 # 玩家在亲和有效时间内的重连时，将分配到上一个连接的服务器
 affinityMillis = 1200000
 ################################
-# bungee 块配置为 Waterfall 独有
+# velocity 块配置为 Velocity 独有
 ################################
-[bungee]
-# Waterfall 侧开启的 Prometheus Metrics 服务器端口
+[velocity]
+# Velocity 侧开启的 Prometheus Metrics 服务器端口
 # 应当为 0 和 65535 之间，如果为 0 则不开启服务器
 prometheusServerPort = 0
 # 外部地址白名单，位于白名单的外部地址
@@ -58,15 +58,15 @@ externalAddressWhitelist = []
 
 ## Prometheus Metrics 服务器
 
-Prometheus Metrics 服务器会在 Waterfall 侧开放，并监听 `prometheusServerPort` 设置的端口。
+Prometheus Metrics 服务器会在 Velocity 侧开放，并监听 `prometheusServerPort` 设置的端口。
 
 以下是 Prometheus Metrics 服务器提供的指标：
 
 | 指标类型    | 指标名                                                               | 解释                                                 |
 |---------|-------------------------------------------------------------------|----------------------------------------------------|
-| Counter | `gongdaobei_pings_total`                                          | 服务器在 Waterfall 侧总共 ping 了多少次                       |
-| Counter | `gongdaobei_logins_total`                                         | 服务器在 Waterfall 侧总共有多少次有效登录                         |
-| Counter | `gongdaobei_logins_with_affinity_total`                           | 服务器在 Waterfall 侧总共有多少次在亲和有效时间内的有效登录                |
+| Counter | `gongdaobei_pings_total`                                          | 服务器在 Velocity 侧总共 ping 了多少次                        |
+| Counter | `gongdaobei_logins_total`                                         | 服务器在 Velocity 侧总共有多少次有效登录                          |
+| Counter | `gongdaobei_logins_with_affinity_total`                           | 服务器在 Velocity 侧总共有多少次在亲和有效时间内的有效登录                 |
 | Gauge   | `gongdaobei_online_players`                                       | 服务器总共多少在线玩家                                        |
 | Gauge   | `gongdaobei_fallback_online_players`                              | 服务器标记为 fallback 的端总共多少在线玩家                         |
 | Gauge   | `gongdaobei_targeted_online_players{address}`                     | 服务器标记 `address` 外部域名的端总共多少在线玩家                     |

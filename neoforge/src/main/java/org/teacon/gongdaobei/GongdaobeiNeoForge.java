@@ -20,22 +20,17 @@ package org.teacon.gongdaobei;
 import com.google.common.base.Preconditions;
 import com.google.gson.JsonNull;
 import com.mojang.logging.LogUtils;
-import com.mojang.serialization.JsonOps;
 import io.lettuce.core.RedisClient;
 import io.lettuce.core.api.StatefulRedisConnection;
 import io.lettuce.core.codec.StringCodec;
 import io.lettuce.core.masterreplica.MasterReplica;
 import net.minecraft.Util;
 import net.minecraft.server.dedicated.DedicatedServer;
-import net.minecraftforge.common.MinecraftForge;
-import net.minecraftforge.event.server.ServerStartingEvent;
-import net.minecraftforge.event.server.ServerStoppingEvent;
-import net.minecraftforge.fml.IExtensionPoint;
-import net.minecraftforge.fml.ModLoadingContext;
-import net.minecraftforge.fml.common.Mod;
-import net.minecraftforge.fml.loading.FMLPaths;
-import net.minecraftforge.network.NetworkConstants;
-import net.minecraftforge.network.ServerStatusPing;
+import net.neoforged.fml.common.Mod;
+import net.neoforged.fml.loading.FMLPaths;
+import net.neoforged.neoforge.common.NeoForge;
+import net.neoforged.neoforge.event.server.ServerStartingEvent;
+import net.neoforged.neoforge.event.server.ServerStoppingEvent;
 import org.apache.commons.lang3.StringUtils;
 import org.slf4j.Logger;
 
@@ -46,19 +41,17 @@ import java.nio.file.Path;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 
-@Mod(GongdaobeiForge.ID)
-public final class GongdaobeiForge {
+@Mod(GongdaobeiNeoForge.ID)
+public final class GongdaobeiNeoForge {
     public static final String ID = "gongdaobei";
     private static final Logger LOGGER = LogUtils.getLogger();
 
     private GongdaobeiTomlConfig.Service config;
     private Handler handler;
 
-    public GongdaobeiForge() {
-        ModLoadingContext.get().registerExtensionPoint(IExtensionPoint.DisplayTest.class,
-                () -> new IExtensionPoint.DisplayTest(() -> NetworkConstants.IGNORESERVERONLY, (v, s) -> true));
-        MinecraftForge.EVENT_BUS.addListener(this::onStarting);
-        MinecraftForge.EVENT_BUS.addListener(this::onStopping);
+    public GongdaobeiNeoForge() {
+        NeoForge.EVENT_BUS.addListener(this::onStarting);
+        NeoForge.EVENT_BUS.addListener(this::onStopping);
     }
 
     private void onStarting(ServerStartingEvent event) {
@@ -136,14 +129,12 @@ public final class GongdaobeiForge {
         public void run() {
             var count = this.server.getTickCount();
             if ((count - 1) % 20 == 19) {
-                var pingForgeData = ServerStatusPing.CODEC.encodeStart(
-                        JsonOps.INSTANCE, new ServerStatusPing()).result().orElse(JsonNull.INSTANCE);
                 var params = Map.entry(
                         this.config.internalAddress().getValue().withDefaultPort(this.server.getPort()),
                         new GongdaobeiServiceParams(this.hostname,
                                 this.config, false, this.server.getMotd(),
-                                this.twentyTicksAvgMillis(this.server.tickTimes, count),
-                                this.server.getPlayerCount(), this.server.getMaxPlayers(), pingForgeData));
+                                this.twentyTicksAvgMillis(this.server.getTickTimesNanos(), count),
+                                this.server.getPlayerCount(), this.server.getMaxPlayers(), JsonNull.INSTANCE));
                 CompletableFuture.runAsync(() -> GongdaobeiUtil.setServiceParams(params, this.conn), Util.ioPool());
             }
         }
@@ -155,7 +146,7 @@ public final class GongdaobeiForge {
                     this.config.internalAddress().getValue().withDefaultPort(this.server.getPort()),
                     new GongdaobeiServiceParams(this.hostname,
                             this.config, true, this.server.getMotd(),
-                            this.twentyTicksAvgMillis(this.server.tickTimes, count),
+                            this.twentyTicksAvgMillis(this.server.getTickTimesNanos(), count),
                             this.server.getPlayerCount(), this.server.getMaxPlayers(), JsonNull.INSTANCE));
             var future = CompletableFuture.runAsync(() -> GongdaobeiUtil.setServiceParams(params, this.conn), Util.ioPool());
             future.thenRun(this.redisClient::close);
