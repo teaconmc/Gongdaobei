@@ -21,7 +21,7 @@ steps:
     path: /root/.gradle
 
 - name: publish
-  image: azul/zulu-openjdk-alpine:21
+  image: mcr.microsoft.com/openjdk/jdk:21-ubuntu
   environment:
     GITEA_TOKEN:
       from_secret: gitea_teaconmc_token
