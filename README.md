@@ -8,7 +8,7 @@ Gongdaobei（公道杯）：Velocity 分服服务发现 & 负载均衡。
 
 ## 配置文件
 
-NeoForge 侧配置文件位于 `config/gongdaobei.toml`，Velocity 侧位于 `plugins/Gongdaobei/gongdaobei.toml`。
+NeoForge 侧配置文件位于 `config/gongdaobei.toml`，Velocity 侧位于 `plugins/gongdaobei/gongdaobei.toml`。
 
 ```toml
 ################################
@@ -33,6 +33,9 @@ externalAddresses = []
 # 是否为 fallback 服务器
 # 如任何服务器外部地址均不满足玩家连接，玩家将选择一 fallback 服务器连接
 isFallbackServer = true
+# 是否将玩家数据与 redis 同步
+# 当玩家因为负载均衡分配到不同服务器时将分享相同的玩家数据
+syncPlayersFromRedis = true
 # 版本号，需为合法的语义化版本，可带 v 前缀
 # 版本新旧决定服务器优先级（版本比较服从语义化版本定义）
 # 玩家只会连接优先级最高即版本号最新的服务器

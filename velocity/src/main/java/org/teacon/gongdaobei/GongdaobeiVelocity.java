@@ -17,8 +17,7 @@
  */
 package org.teacon.gongdaobei;
 
-import com.google.common.collect.Maps;
-import com.google.common.collect.Sets;
+import com.google.common.collect.*;
 import com.google.common.net.HostAndPort;
 import com.google.common.util.concurrent.Runnables;
 import com.google.gson.JsonObject;
@@ -32,7 +31,6 @@ import com.velocitypowered.api.event.proxy.ProxyPingEvent;
 import com.velocitypowered.api.event.proxy.ProxyShutdownEvent;
 import com.velocitypowered.api.plugin.Plugin;
 import com.velocitypowered.api.plugin.annotation.DataDirectory;
-import com.velocitypowered.api.proxy.InboundConnection;
 import com.velocitypowered.api.proxy.ProxyServer;
 import com.velocitypowered.api.proxy.server.ServerInfo;
 import com.velocitypowered.api.scheduler.ScheduledTask;
@@ -52,10 +50,11 @@ import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.*;
+import java.util.Arrays;
+import java.util.Random;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -187,53 +186,6 @@ public final class GongdaobeiVelocity {
         }
     }
 
-    public record ServerEntry(boolean isTarget,
-                              boolean isFallback,
-                              HostAndPort internalAddress,
-                              GongdaobeiServiceParams serviceParams) {
-        public static List<ServerEntry> from(InboundConnection connection, GongdaobeiRegistry registry) {
-            var targetedExternals = new LinkedHashSet<HostAndPort>();
-            var playerExternalAddr = connection.getVirtualHost();
-            if (playerExternalAddr.isPresent()) {
-                for (var addr : registry.getTargetedExternalAddrOnline()) {
-                    var sameHost = addr.getHost().equals(playerExternalAddr.get().getHostString());
-                    var samePort = !addr.hasPort() || addr.getPort() == playerExternalAddr.get().getPort();
-                    if (sameHost && samePort) {
-                        targetedExternals.add(addr);
-                    }
-                }
-            }
-            return from(targetedExternals, registry);
-        }
-
-        private static List<ServerEntry> from(Collection<HostAndPort> externals, GongdaobeiRegistry registry) {
-            var result = new ArrayList<ServerEntry>();
-            if (externals.isEmpty()) {
-                var fallbackInternals = registry.getFallbackInternalAddrOnline(true);
-                for (var internalAddr : fallbackInternals) {
-                    var params = registry.getParams(internalAddr);
-                    result.add(new ServerEntry(false, true, internalAddr, params));
-                }
-            } else {
-                for (var externalAddr : externals) {
-                    var targetedInternals = registry.getTargetedInternalAddrOnline(externalAddr, true);
-                    for (var internalAddr : targetedInternals) {
-                        var params = registry.getParams(internalAddr);
-                        result.add(new ServerEntry(true, false, internalAddr, params));
-                    }
-                }
-            }
-            return List.copyOf(result);
-        }
-
-        @Override
-        public String toString() {
-            return this.internalAddress +
-                    " (target: " + (this.isTarget ? "TRUE" : "FALSE") +
-                    ", fallback: " + (this.isFallback ? "TRUE" : "FALSE") + ")";
-        }
-    }
-
     public static final class Handler implements Runnable, Closeable {
         private final Logger logger;
         private final ProxyServer server;
@@ -246,7 +198,7 @@ public final class GongdaobeiVelocity {
         private final Random randomGenerator = new Random();
         private final AtomicInteger scheduleCounter = new AtomicInteger();
         private final CompletableFuture<? extends StatefulRedisConnection<String, String>> conn;
-        private final ConcurrentMap<HostAndPort, String> cachedServerNameMap = new ConcurrentHashMap<>();
+        private final BiMap<HostAndPort, String> cachedServerNameMap = Maps.synchronizedBiMap(HashBiMap.create());
 
         public Handler(GongdaobeiVelocity plugin, GongdaobeiTomlConfig.Velocity config) {
             this.logger = plugin.logger;
@@ -292,8 +244,13 @@ public final class GongdaobeiVelocity {
             // update index
             var index = this.scheduleCounter.getAndIncrement();
             // update registry
-            var registry = GongdaobeiUtil.getRegistryByRedis(
-                    this.conn, this.externalAddressWhitelist, this::getOrCreateServerName);
+            var registryBuilder = new GongdaobeiRegistry.Builder(this::getOrCreateServerName);
+            try {
+                GongdaobeiUtil.buildRegistry(registryBuilder, this.externalAddressWhitelist, this.conn.get().sync());
+            } catch (ExecutionException | InterruptedException e) {
+                this.logger.fine("The redis server is offline, no service data will be retrieved: " + e.getMessage());
+            }
+            var registry = registryBuilder.build();
             var prevRegistry = this.currentRegistry.getAndSet(registry);
             // calculate fallback and targeted
             var currentFallback = Pair.of(
@@ -395,65 +352,69 @@ public final class GongdaobeiVelocity {
 
         @Subscribe
         public void on(DisconnectEvent event) {
-            event.getPlayer().getCurrentServer()
-                    .map(server1 -> server1.getServerInfo().getName())
-                    .flatMap(name -> GongdaobeiUtil.getHostAndPort(name, "gongdaobei:", true))
-                    .ifPresent(addr -> {
-                        var params = this.currentRegistry.get().getParams(addr);
-                        if (params != null && !params.isRetired) {
-                            var playerUniqueId = event.getPlayer().getUniqueId();
-                            GongdaobeiUtil.setAffinityTarget(playerUniqueId, addr, this.conn, params.affinityMillis);
-                        }
-                    });
+            try {
+                var cmd = this.conn.get().sync();
+                GongdaobeiUtil.refreshAffinity(event.getPlayer().getUniqueId(), this::getConfirmationAffinity, cmd);
+            } catch (ExecutionException | InterruptedException e) {
+                this.logger.fine("The redis server is offline, no service data will be retrieved: " + e.getMessage());
+            }
         }
 
         @Subscribe
         public void on(PlayerChooseInitialServerEvent event) {
             var player = event.getPlayer();
-            var playerChoices = ServerEntry.from(player, this.currentRegistry.get());
+            var playerExternal = player.getVirtualHost().orElse(null);
+            var playerChoices = GongdaobeiConfirmation.filter(playerExternal, this.currentRegistry.get());
             // if there is an affinity host which has space, send the player to that server
             var playerName = player.getUsername();
             var playerUniqueId = player.getUniqueId();
-            var affinityHost = GongdaobeiUtil.getAffinityTarget(playerUniqueId, this.conn);
-            var affinityParams = playerChoices.stream()
-                    .filter(e -> affinityHost.filter(e.internalAddress()::equals).isPresent()).findFirst();
-            if (affinityParams.isPresent()) {
-                var online = affinityParams.get().serviceParams().onlinePlayers;
-                var maximum = affinityParams.get().serviceParams().maximumPlayers;
-                if (online < maximum) {
-                    this.logger.info("Affinity server found, send " +
-                            playerName + " (" + playerUniqueId + ") to the " +
-                            "affinity server (" + affinityHost.get() + ", choices: " + playerChoices + ")");
-                    var initialServer = this.server.getServer(this.cachedServerNameMap.get(affinityHost.get()));
-                    event.setInitialServer(initialServer.orElse(null));
-                    PromMetrics.totalLoginsWithAffinity.inc();
-                    PromMetrics.totalLogins.inc();
-                    return;
+            try {
+                var cmd = this.conn.get().sync();
+                var affinity = GongdaobeiUtil.fetchAffinity(playerUniqueId, cmd);
+                var affinityParams = affinity.map(playerChoices::get);
+                if (affinityParams.isPresent()) {
+                    var online = affinityParams.get().onlinePlayers;
+                    var maximum = affinityParams.get().maximumPlayers;
+                    if (online < maximum) {
+                        this.logger.info("Affinity server found, send " + playerName + " (" + playerUniqueId
+                                + ") to the affinity server (" + affinity.get() + ", choices: " + playerChoices + ")");
+                        GongdaobeiUtil.confirmPlayer(playerUniqueId, affinity.get(), cmd);
+                        var serverName = this.cachedServerNameMap.get(affinity.get().internalAddress());
+                        event.setInitialServer(this.server.getServer(serverName).orElse(null));
+                        PromMetrics.totalLoginsWithAffinity.inc();
+                        PromMetrics.totalLogins.inc();
+                        return;
+                    }
                 }
-            }
-            // weighted random choices
-            var online = playerChoices.stream().mapToInt(e -> e.serviceParams().onlinePlayers).toArray();
-            var maximum = playerChoices.stream().mapToInt(e -> e.serviceParams().maximumPlayers).toArray();
-            var occupancyRateSummary = IntStream.range(0, online.length).mapToDouble(i ->
-                    maximum[i] > 0 ? (online[i] + 1.0) / maximum[i] : 1.0).summaryStatistics();
-            var highestOccupancyRate = occupancyRateSummary.getMin() > 1.0 ?
-                    occupancyRateSummary.getMax() : Math.min(occupancyRateSummary.getMax(), 1.0);
-            var weights = IntStream.range(0, maximum.length).mapToDouble(i ->
-                    Math.max(0.0, maximum[i] * highestOccupancyRate - online[i])).toArray();
-            var random = this.randomGenerator.nextDouble() * Arrays.stream(weights).map(w -> w * w).sum();
-            var iterator = playerChoices.stream().iterator();
-            for (var i = 0; i < online.length; ++i) {
-                var next = iterator.next();
-                random -= weights[i] * weights[i];
-                if (random < 0.0) {
-                    this.logger.info("Load balancing performed, send " + playerName + " " +
-                            "(" + playerUniqueId + ") to the target or the fallback server " +
-                            "(" + next.internalAddress() + ", choices: " + playerChoices + ")");
-                    var initialServer = this.server.getServer(this.cachedServerNameMap.get(next.internalAddress()));
-                    event.setInitialServer(initialServer.orElse(null));
-                    PromMetrics.totalLogins.inc();
-                    return;
+                // weighted random choices
+                var online = playerChoices.values().stream().mapToInt(e -> e.onlinePlayers).toArray();
+                var maximum = playerChoices.values().stream().mapToInt(e -> e.maximumPlayers).toArray();
+                var occupancyRateSummary = IntStream.range(0, online.length).mapToDouble(i ->
+                        maximum[i] > 0 ? (online[i] + 1.0) / maximum[i] : 1.0).summaryStatistics();
+                var highestOccupancyRate = occupancyRateSummary.getMin() > 1.0 ?
+                        occupancyRateSummary.getMax() : Math.min(occupancyRateSummary.getMax(), 1.0);
+                var weights = IntStream.range(0, maximum.length).mapToDouble(i ->
+                        Math.max(0.0, maximum[i] * highestOccupancyRate - online[i])).toArray();
+                var random = this.randomGenerator.nextDouble() * Arrays.stream(weights).map(w -> w * w).sum();
+                var iterator = playerChoices.entrySet().iterator();
+                for (var i = 0; i < online.length; ++i) {
+                    var next = iterator.next();
+                    random -= weights[i] * weights[i];
+                    if (random < 0.0) {
+                        var balanced = next.getKey();
+                        this.logger.info("Load balancing performed, send " + playerName + " (" + playerUniqueId +
+                                ") to the chosen balanced server (" + balanced + ", choices: " + playerChoices + ")");
+                        GongdaobeiUtil.confirmPlayer(playerUniqueId, balanced, cmd);
+                        var serverName = this.cachedServerNameMap.get(balanced.internalAddress());
+                        event.setInitialServer(this.server.getServer(serverName).orElse(null));
+                        PromMetrics.totalLogins.inc();
+                        return;
+                    }
                 }
+            } catch (ExecutionException | InterruptedException e) {
+                this.logger.fine("The redis server is offline, no service data will be retrieved: " + e.getMessage());
+                player.disconnect(Component.translatable("velocity.error.no-available-servers"));
+                return;
             }
             // if there is no choice (such that all the choices are full), disconnect
             player.disconnect(Component.translatable("velocity.error.no-available-servers"));
@@ -465,12 +426,14 @@ public final class GongdaobeiVelocity {
         public void on(ProxyPingEvent event) {
             var builder = event.getPing().asBuilder();
             var limit = this.server.getConfiguration().getShowMaxPlayers();
-            var playerChoices = ServerEntry.from(event.getConnection(), this.currentRegistry.get());
-            var online = playerChoices.stream().mapToInt(p -> p.serviceParams().onlinePlayers).sum();
-            var maximum = playerChoices.stream().mapToInt(p -> p.serviceParams().maximumPlayers).sum();
+            var playerExternal = event.getConnection().getVirtualHost().orElse(null);
+            var playerChoices = GongdaobeiConfirmation.filter(playerExternal, this.currentRegistry.get());
+            var online = playerChoices.values().stream().mapToInt(p -> p.onlinePlayers).sum();
+            var maximum = playerChoices.values().stream().mapToInt(p -> p.maximumPlayers).sum();
             var pingForgeData = this.getDefaultPingForgeData();
             if (!playerChoices.isEmpty()) {
-                var random = playerChoices.get(this.randomGenerator.nextInt(playerChoices.size())).serviceParams();
+                var randomIndex = this.randomGenerator.nextInt(playerChoices.size());
+                var random = Iterators.get(playerChoices.values().stream().iterator(), randomIndex);
                 if (random.pingForgeData instanceof JsonObject randomPingForgeData) {
                     randomPingForgeData.asMap().forEach(pingForgeData::add);
                 }
@@ -514,6 +477,11 @@ public final class GongdaobeiVelocity {
                 }
                 return v;
             });
+        }
+
+        private long getConfirmationAffinity(GongdaobeiConfirmation confirmation) {
+            var params = this.currentRegistry.get().getParams(confirmation.internalAddress());
+            return params != null && !params.isRetired ? params.affinityMillis : 0;
         }
     }
 }

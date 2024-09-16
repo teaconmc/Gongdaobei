@@ -45,6 +45,7 @@ public final class GongdaobeiTomlConfig {
     private static final String EXTERNAL_ADDRESS_WHITELIST = "externalAddressWhitelist";
     private static final String INTERNAL_ADDRESS = "internalAddress";
     private static final String EXTERNAL_ADDRESSES = "externalAddresses";
+    private static final String SYNC_PLAYERS_FROM_REDIS = "syncPlayersFromRedis";
     private static final String IS_FALLBACK_SERVER = "isFallbackServer";
     private static final String VERSION = "version";
     private static final String AFFINITY_MILLIS = "affinityMillis";
@@ -54,6 +55,7 @@ public final class GongdaobeiTomlConfig {
     private static final String DEFAULT_INTERNAL_ADDRESS = "${GONGDAOBEI_SERVICE_INTERNAL:-localhost}";
     private static final List<String> DEFAULT_EXTERNAL_ADDRESSES = List.of();
     private static final boolean DEFAULT_IS_FALLBACK_SERVER = true;
+    private static final boolean DEFAULT_SYNC_PLAYERS_FROM_REDIS = true;
     private static final String DEFAULT_VERSION = "${GONGDAOBEI_SERVICE_VERSION:-1.0.0}";
     private static final long DEFAULT_AFFINITY_MILLIS = 1200000L;
 
@@ -81,7 +83,8 @@ public final class GongdaobeiTomlConfig {
         private final String pattern;
 
         public AddressPattern(String pattern, StringLookup lookup) {
-            this.object = GongdaobeiUtil.getHostAndPortUnchecked(new StringSubstitutor(lookup).replace(pattern).strip());
+            var text = new StringSubstitutor(lookup).replace(pattern).strip();
+            this.object = GongdaobeiUtil.getHostAndPort(text, "", false).orElseThrow(IllegalArgumentException::new);
             this.pattern = pattern;
         }
 
@@ -166,7 +169,9 @@ public final class GongdaobeiTomlConfig {
                 return new Velocity(
                         new RedisLocationPattern(discoveryRedisUri, lookup),
                         Math.toIntExact(Math.min(65535L, Math.max(0L, prometheusServerPort))),
-                        List.of(externalAddresses.stream().map(p -> new AddressPattern(p, lookup)).toArray(AddressPattern[]::new)));
+                        List.of(externalAddresses.stream()
+                                .map(p -> new AddressPattern(p, lookup))
+                                .toArray(AddressPattern[]::new)));
             } catch (IOException | ClassCastException e) {
                 throw new IllegalArgumentException(e);
             }
@@ -177,6 +182,7 @@ public final class GongdaobeiTomlConfig {
                           AddressPattern internalAddress,
                           List<AddressPattern> externalAddresses,
                           boolean isFallbackServer,
+                          boolean syncPlayersFromRedis,
                           VersionPattern version,
                           long affinityMillis) {
         public Service save(Path configFile) {
@@ -188,6 +194,7 @@ public final class GongdaobeiTomlConfig {
                         INTERNAL_ADDRESS, this.internalAddress.toString(),
                         EXTERNAL_ADDRESSES, Lists.transform(this.externalAddresses, AddressPattern::toString),
                         IS_FALLBACK_SERVER, this.isFallbackServer,
+                        SYNC_PLAYERS_FROM_REDIS, this.syncPlayersFromRedis,
                         VERSION, this.version.toString(),
                         AFFINITY_MILLIS, this.affinityMillis);
                 toml.write(ImmutableMap.of("common", common, "service", service), output);
@@ -210,6 +217,8 @@ public final class GongdaobeiTomlConfig {
                         .map(t -> t.<String>getList(EXTERNAL_ADDRESSES)).orElse(DEFAULT_EXTERNAL_ADDRESSES);
                 var isFallbackServer = service
                         .map(t -> t.getBoolean(IS_FALLBACK_SERVER)).orElse(DEFAULT_IS_FALLBACK_SERVER);
+                var syncPlayersFromRedis = service
+                        .map(t -> t.getBoolean(SYNC_PLAYERS_FROM_REDIS)).orElse(DEFAULT_SYNC_PLAYERS_FROM_REDIS);
                 var version = service
                         .map(t -> t.getString(VERSION)).orElse(DEFAULT_VERSION);
                 var affinityMillis = service
@@ -218,8 +227,10 @@ public final class GongdaobeiTomlConfig {
                 return new Service(
                         new RedisLocationPattern(discoveryRedisUri, lookup),
                         new AddressPattern(internalAddress, lookup),
-                        List.of(externalAddresses.stream().map(p -> new AddressPattern(p, lookup)).toArray(AddressPattern[]::new)),
-                        isFallbackServer,
+                        List.of(externalAddresses.stream()
+                                .map(p -> new AddressPattern(p, lookup))
+                                .toArray(AddressPattern[]::new)),
+                        isFallbackServer, syncPlayersFromRedis,
                         new VersionPattern(version, lookup),
                         affinityMillis);
             } catch (IOException | ClassCastException | SemverException e) {
