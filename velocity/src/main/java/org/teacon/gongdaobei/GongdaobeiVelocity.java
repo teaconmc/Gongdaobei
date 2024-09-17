@@ -17,7 +17,9 @@
  */
 package org.teacon.gongdaobei;
 
-import com.google.common.collect.*;
+import com.google.common.collect.Iterators;
+import com.google.common.collect.Maps;
+import com.google.common.collect.Sets;
 import com.google.common.net.HostAndPort;
 import com.google.common.util.concurrent.Runnables;
 import com.google.gson.JsonObject;
@@ -53,9 +55,7 @@ import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.Random;
 import java.util.Set;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.logging.Level;
@@ -198,7 +198,7 @@ public final class GongdaobeiVelocity {
         private final Random randomGenerator = new Random();
         private final AtomicInteger scheduleCounter = new AtomicInteger();
         private final CompletableFuture<? extends StatefulRedisConnection<String, String>> conn;
-        private final BiMap<HostAndPort, String> cachedServerNameMap = Maps.synchronizedBiMap(HashBiMap.create());
+        private final ConcurrentMap<HostAndPort, String> cachedServerNameMap = new ConcurrentHashMap<>();
 
         public Handler(GongdaobeiVelocity plugin, GongdaobeiTomlConfig.Velocity config) {
             this.logger = plugin.logger;
