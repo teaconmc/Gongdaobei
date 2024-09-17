@@ -480,8 +480,10 @@ public final class GongdaobeiVelocity {
         }
 
         private long getConfirmationAffinity(GongdaobeiConfirmation confirmation) {
-            var params = this.currentRegistry.get().getParams(confirmation.internalAddress());
-            return params != null && !params.isRetired ? params.affinityMillis : 0;
+            var registry = this.currentRegistry.get();
+            var internalAddr = confirmation.internalAddress();
+            var internalAddrOnline = registry.getInternalAddrOnline();
+            return internalAddrOnline.contains(internalAddr) ? registry.getParams(internalAddr).affinityMillis : 0;
         }
     }
 }
