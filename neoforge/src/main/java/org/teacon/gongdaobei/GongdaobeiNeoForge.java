@@ -308,7 +308,7 @@ public final class GongdaobeiNeoForge {
             var count = this.getServer().getTickCount();
             for (var player : this.getPlayers()) {
                 var id = player.getUUID();
-                if ((count - 1) % 250 == id.hashCode() % 250) {
+                if ((id.hashCode() + count - 1) % 250 == 0) {
                     // noinspection resource
                     Util.ioPool().submit(() -> {
                         try {
