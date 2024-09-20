@@ -53,6 +53,7 @@ import java.net.InetSocketAddress;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
+import java.util.LinkedHashMap;
 import java.util.Random;
 import java.util.Set;
 import java.util.concurrent.*;
@@ -364,7 +365,8 @@ public final class GongdaobeiVelocity {
         public void on(PlayerChooseInitialServerEvent event) {
             var player = event.getPlayer();
             var playerExternal = player.getVirtualHost().orElse(null);
-            var playerChoices = GongdaobeiConfirmation.filter(playerExternal, this.currentRegistry.get());
+            var playerChoices = new LinkedHashMap<GongdaobeiConfirmation, GongdaobeiServiceParams>();
+            GongdaobeiConfirmation.collect(playerExternal, this.currentRegistry.get(), playerChoices::put);
             // if there is an affinity host which has space, send the player to that server
             var playerName = player.getUsername();
             var playerUniqueId = player.getUniqueId();
@@ -427,7 +429,8 @@ public final class GongdaobeiVelocity {
             var builder = event.getPing().asBuilder();
             var limit = this.server.getConfiguration().getShowMaxPlayers();
             var playerExternal = event.getConnection().getVirtualHost().orElse(null);
-            var playerChoices = GongdaobeiConfirmation.filter(playerExternal, this.currentRegistry.get());
+            var playerChoices = new LinkedHashMap<GongdaobeiConfirmation, GongdaobeiServiceParams>();
+            GongdaobeiConfirmation.collect(playerExternal, this.currentRegistry.get(), playerChoices::put);
             var online = playerChoices.values().stream().mapToInt(p -> p.onlinePlayers).sum();
             var maximum = playerChoices.values().stream().mapToInt(p -> p.maximumPlayers).sum();
             var pingForgeData = this.getDefaultPingForgeData();

@@ -1,12 +1,12 @@
 package org.teacon.gongdaobei;
 
-import com.google.common.collect.ImmutableMap;
 import com.google.common.net.HostAndPort;
 
+import javax.annotation.Nullable;
 import java.net.InetSocketAddress;
 import java.util.LinkedHashSet;
-import java.util.Map;
 import java.util.Optional;
+import java.util.function.BiConsumer;
 import java.util.function.Predicate;
 
 public sealed interface GongdaobeiConfirmation extends Predicate<GongdaobeiServiceParams> {
@@ -20,32 +20,28 @@ public sealed interface GongdaobeiConfirmation extends Predicate<GongdaobeiServi
     @Override
     boolean test(GongdaobeiServiceParams params);
 
-    static Map<GongdaobeiConfirmation, GongdaobeiServiceParams> filter(InetSocketAddress playerAddr,
-                                                                       GongdaobeiRegistry registry) {
+    static void collect(@Nullable InetSocketAddress playerAddr, GongdaobeiRegistry registry,
+                        BiConsumer<? super GongdaobeiConfirmation, ? super GongdaobeiServiceParams> collector) {
         var externalChoices = new LinkedHashSet<HostAndPort>();
         for (var addr : registry.getTargetedExternalAddrOnline()) {
-            var sameHost = addr.getHost().equals(playerAddr.getHostString());
-            var samePort = !addr.hasPort() || addr.getPort() == playerAddr.getPort();
+            var sameHost = playerAddr != null && addr.getHost().equals(playerAddr.getHostString());
+            var samePort = !addr.hasPort() || playerAddr != null && addr.getPort() == playerAddr.getPort();
             if (sameHost && samePort) {
                 externalChoices.add(addr);
             }
         }
-        var result = ImmutableMap.
-                <GongdaobeiConfirmation, GongdaobeiServiceParams>
-                builderWithExpectedSize(externalChoices.size() + 1);
         if (externalChoices.isEmpty()) {
             var fallbackInternals = registry.getFallbackInternalAddrOnline(true);
             for (var internalAddr : fallbackInternals) {
-                result.put(new Fallback(internalAddr), registry.getParams(internalAddr));
+                collector.accept(new Fallback(internalAddr), registry.getParams(internalAddr));
             }
         }
         for (var externalAddr : externalChoices) {
             var targetedInternals = registry.getTargetedInternalAddrOnline(externalAddr, true);
             for (var internalAddr : targetedInternals) {
-                result.put(new Targeted(internalAddr, externalAddr), registry.getParams(internalAddr));
+                collector.accept(new Targeted(internalAddr, externalAddr), registry.getParams(internalAddr));
             }
         }
-        return result.build();
     }
 
     static Optional<GongdaobeiConfirmation> tryParse(String input) {
