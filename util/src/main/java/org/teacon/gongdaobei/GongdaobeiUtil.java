@@ -20,6 +20,8 @@ package org.teacon.gongdaobei;
 import com.google.common.net.HostAndPort;
 import io.lettuce.core.*;
 import io.lettuce.core.api.sync.RedisCommands;
+import io.lettuce.core.cluster.ClusterClientOptions;
+import io.lettuce.core.cluster.ClusterTopologyRefreshOptions;
 import org.apache.commons.lang3.tuple.Pair;
 
 import java.io.IOException;
@@ -52,8 +54,9 @@ public final class GongdaobeiUtil {
         return builder.build().toURI().toString();
     }
 
-    public static ClientOptions getRedisClientOptions() {
-        return ClientOptions.builder().publishOnScheduler(true).build();
+    public static ClusterClientOptions getRedisClientOptions() {
+        var refreshOptions = ClusterTopologyRefreshOptions.enabled();
+        return ClusterClientOptions.builder().topologyRefreshOptions(refreshOptions).publishOnScheduler(true).build();
     }
 
     public static Optional<GongdaobeiConfirmation> fetchAffinity(UUID player,
