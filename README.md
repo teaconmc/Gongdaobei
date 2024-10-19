@@ -32,7 +32,7 @@ internalAddress = "${GONGDAOBEI_SERVICE_INTERNAL:-localhost}"
 externalAddresses = []
 # 是否为 fallback 服务器
 # 如任何服务器外部地址均不满足玩家连接，玩家将选择一 fallback 服务器连接
-isFallbackServer = true
+isfallbackServer = true
 # 是否将玩家数据与 redis 同步
 # 当玩家因为负载均衡分配到不同服务器时将分享相同的玩家数据
 syncPlayersFromRedis = true
@@ -65,22 +65,30 @@ Prometheus Metrics 服务器会在 Velocity 侧开放，并监听 `prometheusSer
 
 以下是 Prometheus Metrics 服务器提供的指标：
 
-| 指标类型    | 指标名                                                               | 解释                                                 |
-|---------|-------------------------------------------------------------------|----------------------------------------------------|
-| Counter | `gongdaobei_pings_total`                                          | 服务器在 Velocity 侧总共 ping 了多少次                        |
-| Counter | `gongdaobei_logins_total`                                         | 服务器在 Velocity 侧总共有多少次有效登录                          |
-| Counter | `gongdaobei_logins_with_affinity_total`                           | 服务器在 Velocity 侧总共有多少次在亲和有效时间内的有效登录                 |
-| Gauge   | `gongdaobei_online_players`                                       | 服务器总共多少在线玩家                                        |
-| Gauge   | `gongdaobei_fallback_online_players`                              | 服务器标记为 fallback 的端总共多少在线玩家                         |
-| Gauge   | `gongdaobei_targeted_online_players{address}`                     | 服务器标记 `address` 外部域名的端总共多少在线玩家                     |
-| Gauge   | `gongdaobei_maximum_players`                                      | 服务器玩家上限的值求和                                        |
-| Gauge   | `gongdaobei_fallback_maximum_players`                             | 服务器标记为 fallback 的端玩家上限的值求和                         |
-| Gauge   | `gongdaobei_targeted_maximum_players{address}`                    | 服务器标记 `address` 外部域名的端玩家上限的值求和                     |
-| Gauge   | `gongdaobei_service_instances`                                    | 服务器总共注册了多少端                                        |
-| Gauge   | `gongdaobei_fallback_service_instances`                           | 服务器总共注册了多少标记为 fallback 的端                          |
-| Gauge   | `gongdaobei_targeted_service_instances{address}`                  | 服务器总共注册了多少标记 `address` 外部域名的端                      |
-| Gauge   | `gongdaobei_latest_fallback_service_instances`                    | 服务器总共注册了多少标记为 fallback 且为最新版本的端                    |
-| Gauge   | `gongdaobei_latest_targeted_service_instances{address}`           | 服务器总共注册了多少标记 `address` 外部域名且为最新版本的端                |
-| Gauge   | `gongdaobei_service_tick_duration_seconds{name}`                  | 服务器中名称标记为 `name` 的端每 tick 所占用的秒数                   |
-| Gauge   | `gongdaobei_fallback_service_tick_duration_seconds{name}`         | 服务器中名称标记为 `name` 且标记为 fallback 的端每 tick 所占用的秒数     |
-| Gauge   | `gongdaobei_targeted_service_tick_duration_seconds{address,name}` | 服务器中名称标记为 `name` 且标记 `address` 外部域名的端每 tick 所占用的秒数 |
+| 指标类型    | 指标名                                                               | 解释                                                                                                                  |
+|---------|-------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------|
+| Counter | `gongdaobei_pings_total`                                          | 服务器在 Velocity 侧总共 ping 了多少次                                                                                         |
+| Counter | `gongdaobei_logins_total`                                         | 服务器在 Velocity 侧总共有多少次有效登录                                                                                           |
+| Counter | `gongdaobei_logins_with_affinity_total`                           | 服务器在 Velocity 侧总共有多少次在亲和有效时间内的有效登录                                                                                  |
+| Counter | `gongdaobei_player_network_bytes_total`                           | 服务器在 Velocity 侧特定 `channel`（有效值：`incoming` 和 `outgoing`）共接收或发送了多少字节的来自玩家侧的数据                                        |
+| Counter | `gongdaobei_service_network_bytes_total`                          | 服务器特定 `channel`（有效值：`incoming` 和 `outgoing`）共接收或发送了多少字节的来自 Velocity 侧的数据                                            |
+| Counter | `gongdaobei_fallback_service_network_bytes_total`                 | 服务器标记为 fallback 的端特定 `channel`（有效值：`incoming` 和 `outgoing`）共接收或发送了多少字节的来自 Velocity 侧的数据                             |
+| Counter | `gongdaobei_targeted_service_network_bytes_total`                 | 服务器标记 `address` 外部域名的端特定 `channel`（有效值：`incoming` 和 `outgoing`）共接收或发送了多少字节的来自 Velocity 侧的数据                         |
+| Counter | `gongdaobei_player_uncompressed_network_bytes_total`              | 同 `gongdaobei_player_network_bytes_total`，但统计的是解压后的字节数（如果服务端设置了 `network-compression-threshold` 则两者会有所不同）           |
+| Counter | `gongdaobei_service_uncompressed_network_bytes_total`             | 同 `gongdaobei_service_network_bytes_total`，但统计的是解压后的字节数（如果服务端设置了 `network-compression-threshold` 则两者会有所不同）          |
+| Counter | `gongdaobei_fallback_service_uncompressed_network_bytes_total`    | 同 `gongdaobei_fallback_service_network_bytes_total`，但统计的是解压后的字节数（如果服务端设置了 `network-compression-threshold` 则两者会有所不同） |
+| Counter | `gongdaobei_targeted_service_uncompressed_network_bytes_total`    | 同 `gongdaobei_targeted_service_network_bytes_total`，但统计的是解压后的字节数（如果服务端设置了 `network-compression-threshold` 则两者会有所不同） |
+| Gauge   | `gongdaobei_online_players`                                       | 服务器总共多少在线玩家                                                                                                         |
+| Gauge   | `gongdaobei_fallback_online_players`                              | 服务器标记为 fallback 的端总共多少在线玩家                                                                                          |
+| Gauge   | `gongdaobei_targeted_online_players{address}`                     | 服务器标记 `address` 外部域名的端总共多少在线玩家                                                                                      |
+| Gauge   | `gongdaobei_maximum_players`                                      | 服务器玩家上限的值求和                                                                                                         |
+| Gauge   | `gongdaobei_fallback_maximum_players`                             | 服务器标记为 fallback 的端玩家上限的值求和                                                                                          |
+| Gauge   | `gongdaobei_targeted_maximum_players{address}`                    | 服务器标记 `address` 外部域名的端玩家上限的值求和                                                                                      |
+| Gauge   | `gongdaobei_service_instances`                                    | 服务器总共注册了多少端                                                                                                         |
+| Gauge   | `gongdaobei_fallback_service_instances`                           | 服务器总共注册了多少标记为 fallback 的端                                                                                           |
+| Gauge   | `gongdaobei_targeted_service_instances{address}`                  | 服务器总共注册了多少标记 `address` 外部域名的端                                                                                       |
+| Gauge   | `gongdaobei_latest_fallback_service_instances`                    | 服务器总共注册了多少标记为 fallback 且为最新版本的端                                                                                     |
+| Gauge   | `gongdaobei_latest_targeted_service_instances{address}`           | 服务器总共注册了多少标记 `address` 外部域名且为最新版本的端                                                                                 |
+| Gauge   | `gongdaobei_service_tick_duration_seconds{name}`                  | 服务器中名称标记为 `name` 的端每 tick 所占用的秒数                                                                                    |
+| Gauge   | `gongdaobei_fallback_service_tick_duration_seconds{name}`         | 服务器中名称标记为 `name` 且标记为 fallback 的端每 tick 所占用的秒数                                                                      |
+| Gauge   | `gongdaobei_targeted_service_tick_duration_seconds{address,name}` | 服务器中名称标记为 `name` 且标记 `address` 外部域名的端每 tick 所占用的秒数                                                                  |
