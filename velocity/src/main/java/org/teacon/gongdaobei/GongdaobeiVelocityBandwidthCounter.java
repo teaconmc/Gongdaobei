@@ -218,13 +218,14 @@ public final class GongdaobeiVelocityBandwidthCounter implements Closeable {
                 });
                 // noinspection RedundantThrows
                 ch.pipeline().addBefore("frame-encoder", TX_NAME, new ChannelOutboundHandlerAdapter() {
-                    private ByteBuf cum = Unpooled.EMPTY_BUFFER;
+                    private @Nullable ByteBuf cum = null;
 
                     @Override
                     public void write(ChannelHandlerContext ctx,
                                       Object msg, ChannelPromise promise) throws Exception {
                         if (GongdaobeiVelocityBandwidthCounter.this.enabled && msg instanceof ByteBuf buf) {
-                            this.cum = MERGE_CUMULATOR.cumulate(ctx.alloc(), this.cum, buf.retainedSlice());
+                            var old = this.cum == null ? Unpooled.EMPTY_BUFFER : this.cum;
+                            this.cum = MERGE_CUMULATOR.cumulate(ctx.alloc(), old, buf.retainedSlice());
                             while (true) {
                                 var from = this.cum.readerIndex();
                                 var size = GongdaobeiVelocityBandwidthCounter.this.readVarInt(this.cum);
@@ -241,8 +242,23 @@ public final class GongdaobeiVelocityBandwidthCounter implements Closeable {
                                     this.cum.skipBytes(size.getAsInt());
                                 }
                             }
+                            // release the cumulated buf if it has been fully read
+                            if (this.cum != null && !this.cum.isReadable()) {
+                                this.cum.release();
+                                this.cum = null;
+                            }
                         }
                         ctx.write(msg, promise);
+                    }
+
+                    @Override
+                    public void close(ChannelHandlerContext ctx, ChannelPromise promise) throws Exception {
+                        // release the cumulated buf
+                        if (this.cum != null) {
+                            this.cum.release();
+                            this.cum = null;
+                        }
+                        ctx.close(promise);
                     }
                 });
             } catch (Throwable e) {
@@ -272,21 +288,22 @@ public final class GongdaobeiVelocityBandwidthCounter implements Closeable {
                                             @Nonnull Object msg) throws Exception {
                         if (GongdaobeiVelocityBandwidthCounter.this.enabled && msg instanceof ByteBuf buf) {
                             GongdaobeiVelocityBandwidthCounter.this.serverEntry.updateAndGet(
-                                    value -> GongdaobeiVelocityBandwidthCounter.this.calculateSize(
-                                            false, true, buf, buf.readableBytes(), Entry.emptyIfNull(value)));
+                                    v -> GongdaobeiVelocityBandwidthCounter.this.calculateSize(
+                                            false, true, buf, buf.readableBytes(), Entry.emptyIfNull(v)));
                         }
                         ctx.fireChannelRead(msg);
                     }
                 });
                 // noinspection RedundantThrows
                 ch.pipeline().addBefore("frame-encoder", TX_NAME, new ChannelOutboundHandlerAdapter() {
-                    private ByteBuf cum = Unpooled.EMPTY_BUFFER;
+                    private @Nullable ByteBuf cum = null;
 
                     @Override
                     public void write(ChannelHandlerContext ctx,
                                       Object msg, ChannelPromise promise) throws Exception {
                         if (GongdaobeiVelocityBandwidthCounter.this.enabled && msg instanceof ByteBuf buf) {
-                            this.cum = MERGE_CUMULATOR.cumulate(ctx.alloc(), this.cum, buf.retainedSlice());
+                            var old = this.cum == null ? Unpooled.EMPTY_BUFFER : this.cum;
+                            this.cum = MERGE_CUMULATOR.cumulate(ctx.alloc(), old, buf.retainedSlice());
                             while (true) {
                                 var from = this.cum.readerIndex();
                                 var size = GongdaobeiVelocityBandwidthCounter.this.readVarInt(this.cum);
@@ -301,8 +318,23 @@ public final class GongdaobeiVelocityBandwidthCounter implements Closeable {
                                     this.cum.skipBytes(size.getAsInt());
                                 }
                             }
+                            // release the cumulated buf if it has been fully read
+                            if (this.cum != null && !this.cum.isReadable()) {
+                                this.cum.release();
+                                this.cum = null;
+                            }
                         }
                         ctx.write(msg, promise);
+                    }
+
+                    @Override
+                    public void close(ChannelHandlerContext ctx, ChannelPromise promise) throws Exception {
+                        // release the cumulated buf
+                        if (this.cum != null) {
+                            this.cum.release();
+                            this.cum = null;
+                        }
+                        ctx.close(promise);
                     }
                 });
             } catch (Throwable e) {
