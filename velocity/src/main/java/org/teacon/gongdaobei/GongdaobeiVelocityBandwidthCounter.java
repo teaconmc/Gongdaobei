@@ -264,11 +264,9 @@ public final class GongdaobeiVelocityBandwidthCounter implements Closeable {
                                                 .calculateSize(true, false, this.cum, Entry.emptyIfNull(value)));
                             } finally {
                                 // release the cumulated buf if it has been fully read
-                                if (this.cum != null) {
-                                    if (!this.cum.isReadable()) {
-                                        this.cum.release();
-                                        this.cum = null;
-                                    }
+                                if (this.cum != null && !this.cum.isReadable()) {
+                                    this.cum.release();
+                                    this.cum = null;
                                 }
                                 ctx.write(msg, promise);
                             }
@@ -343,11 +341,9 @@ public final class GongdaobeiVelocityBandwidthCounter implements Closeable {
                                                 .calculateSize(true, false, this.cum, Entry.emptyIfNull(value)));
                             } finally {
                                 // release the cumulated buf if it has been fully read
-                                if (this.cum != null) {
-                                    if (!this.cum.isReadable()) {
-                                        this.cum.release();
-                                        this.cum = null;
-                                    }
+                                if (this.cum != null && !this.cum.isReadable()) {
+                                    this.cum.release();
+                                    this.cum = null;
                                 }
                                 ctx.write(msg, promise);
                             }
