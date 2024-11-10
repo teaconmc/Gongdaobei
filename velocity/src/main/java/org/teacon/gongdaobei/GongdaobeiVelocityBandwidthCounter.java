@@ -44,48 +44,6 @@ public final class GongdaobeiVelocityBandwidthCounter implements Closeable {
     private static final String TX_NAME = "gongdaobei-tx-bandwidth-counter";
     private static final String RX_NAME = "gongdaobei-rx-bandwidth-counter";
 
-    private static @Nullable VarHandle vsCmVar;
-    private static @Nullable MethodHandle scihGetMethod;
-    private static @Nullable MethodHandle bcihGetMethod;
-    private static @Nullable MethodHandle scihSetMethod;
-    private static @Nullable MethodHandle bcihSetMethod;
-    private static @Nullable MethodHandle ciInitCMethod;
-    private static @Nullable MethodHandle cmGetSciMethod;
-    private static @Nullable MethodHandle cmGetBciMethod;
-    private static @Nullable ReflectiveOperationException thrown;
-
-    static {
-        try {
-            var cClass = Channel.class;
-            var ciClass = ChannelInitializer.class;
-            var vsClass = Class.forName("com.velocitypowered.proxy.VelocityServer");
-            var cmClass = Class.forName("com.velocitypowered.proxy.network.ConnectionManager");
-            var scihClass = Class.forName("com.velocitypowered.proxy.network.ServerChannelInitializerHolder");
-            var bcihClass = Class.forName("com.velocitypowered.proxy.network.BackendChannelInitializerHolder");
-
-            var lookup = MethodHandles.lookup();
-            var ciLookup = MethodHandles.privateLookupIn(ciClass, lookup);
-            var vsLookup = MethodHandles.privateLookupIn(vsClass, lookup);
-
-            var ciGetType = MethodType.methodType(ciClass);
-            var scihGetType = MethodType.methodType(scihClass);
-            var bcihGetType = MethodType.methodType(bcihClass);
-            var cInitType = MethodType.methodType(void.class, cClass);
-            var ciSetType = MethodType.methodType(void.class, ciClass);
-
-            vsCmVar = vsLookup.findVarHandle(vsClass, "cm", cmClass);
-            scihGetMethod = lookup.findVirtual(scihClass, "get", ciGetType);
-            bcihGetMethod = lookup.findVirtual(bcihClass, "get", ciGetType);
-            scihSetMethod = lookup.findVirtual(scihClass, "set", ciSetType);
-            bcihSetMethod = lookup.findVirtual(bcihClass, "set", ciSetType);
-            ciInitCMethod = ciLookup.findVirtual(ciClass, "initChannel", cInitType);
-            cmGetSciMethod = lookup.findVirtual(cmClass, "getServerChannelInitializer", scihGetType);
-            cmGetBciMethod = lookup.findVirtual(cmClass, "getBackendChannelInitializer", bcihGetType);
-        } catch (ReflectiveOperationException e) {
-            thrown = e;
-        }
-    }
-
     private final Logger logger;
     private volatile boolean enabled;
 
@@ -98,20 +56,17 @@ public final class GongdaobeiVelocityBandwidthCounter implements Closeable {
         this.enabled = enabled;
         if (enabled) {
             try {
-                var cm = Objects.requireNonNull(vsCmVar).get(plugin.server);
-                var scih = Objects.requireNonNull(cmGetSciMethod).invoke(cm);
-                var bcih = Objects.requireNonNull(cmGetBciMethod).invoke(cm);
-                var oldServer = (ChannelInitializer<Channel>) Objects.requireNonNull(scihGetMethod).invoke(scih);
-                var oldBackend = (ChannelInitializer<Channel>) Objects.requireNonNull(bcihGetMethod).invoke(bcih);
+                var cm = Handles.vsCmVar.get(plugin.server);
+                var scih = Handles.cmGetSciMethod.invoke(cm);
+                var bcih = Handles.cmGetBciMethod.invoke(cm);
+                var oldServer = (ChannelInitializer<Channel>) Handles.scihGetMethod.invoke(scih);
+                var oldBackend = (ChannelInitializer<Channel>) Handles.bcihGetMethod.invoke(bcih);
                 this.logger.info("Injecting packet collector to server handler ...");
-                Objects.requireNonNull(scihSetMethod).invoke(scih, new ServerInitializer(oldServer));
+                Handles.scihSetMethod.invoke(scih, new ServerInitializer(oldServer));
                 this.logger.info("Injecting packet collector to backend handler ...");
-                Objects.requireNonNull(bcihSetMethod).invoke(bcih, new BackendInitializer(oldBackend));
+                Handles.bcihSetMethod.invoke(bcih, new BackendInitializer(oldBackend));
             } catch (Throwable e) {
-                var ex = new RuntimeException(e);
-                if (thrown != null) {
-                    ex.addSuppressed(thrown);
-                }
+                var ex = e instanceof RuntimeException re ? re : new RuntimeException(e);
                 logger.log(Level.SEVERE, "Failed to inject packet size collector: " + e.getMessage(), ex);
                 throw ex;
             }
@@ -190,7 +145,54 @@ public final class GongdaobeiVelocityBandwidthCounter implements Closeable {
         this.enabled = false;
     }
 
-    private class BackendInitializer extends ChannelInitializer<Channel> {
+    private static final class Handles {
+        private static final VarHandle vsCmVar;
+        private static final MethodHandle scihGetMethod;
+        private static final MethodHandle bcihGetMethod;
+        private static final MethodHandle scihSetMethod;
+        private static final MethodHandle bcihSetMethod;
+        private static final MethodHandle ciInitCMethod;
+        private static final MethodHandle cmGetSciMethod;
+        private static final MethodHandle cmGetBciMethod;
+
+        static {
+            try {
+                var cClass = Channel.class;
+                var ciClass = ChannelInitializer.class;
+                var vsClass = Class.forName("com.velocitypowered.proxy.VelocityServer");
+                var cmClass = Class.forName("com.velocitypowered.proxy.network.ConnectionManager");
+                var scihClass = Class.forName("com.velocitypowered.proxy.network.ServerChannelInitializerHolder");
+                var bcihClass = Class.forName("com.velocitypowered.proxy.network.BackendChannelInitializerHolder");
+
+                var lookup = MethodHandles.lookup();
+                var ciLookup = MethodHandles.privateLookupIn(ciClass, lookup);
+                var vsLookup = MethodHandles.privateLookupIn(vsClass, lookup);
+
+                var ciGetType = MethodType.methodType(ciClass);
+                var scihGetType = MethodType.methodType(scihClass);
+                var bcihGetType = MethodType.methodType(bcihClass);
+                var cInitType = MethodType.methodType(void.class, cClass);
+                var ciSetType = MethodType.methodType(void.class, ciClass);
+
+                vsCmVar = vsLookup.findVarHandle(vsClass, "cm", cmClass);
+                scihGetMethod = lookup.findVirtual(scihClass, "get", ciGetType);
+                bcihGetMethod = lookup.findVirtual(bcihClass, "get", ciGetType);
+                scihSetMethod = lookup.findVirtual(scihClass, "set", ciSetType);
+                bcihSetMethod = lookup.findVirtual(bcihClass, "set", ciSetType);
+                ciInitCMethod = ciLookup.findVirtual(ciClass, "initChannel", cInitType);
+                cmGetSciMethod = lookup.findVirtual(cmClass, "getServerChannelInitializer", scihGetType);
+                cmGetBciMethod = lookup.findVirtual(cmClass, "getBackendChannelInitializer", bcihGetType);
+            } catch (ReflectiveOperationException e) {
+                throw new RuntimeException(e);
+            }
+        }
+
+        private Handles() {
+            throw new UnsupportedOperationException();
+        }
+    }
+
+    private final class BackendInitializer extends ChannelInitializer<Channel> {
         private final ChannelInitializer<Channel> original;
 
         public BackendInitializer(ChannelInitializer<Channel> original) {
@@ -200,7 +202,7 @@ public final class GongdaobeiVelocityBandwidthCounter implements Closeable {
         @Override
         protected void initChannel(@Nonnull Channel ch) throws Exception {
             try {
-                Objects.requireNonNull(ciInitCMethod).invoke(this.original, ch);
+                Handles.ciInitCMethod.invoke(this.original, ch);
                 // noinspection RedundantThrows
                 ch.pipeline().addBefore("frame-encoder", RX_NAME, new ChannelInboundHandlerAdapter() {
                     @Override
@@ -276,7 +278,7 @@ public final class GongdaobeiVelocityBandwidthCounter implements Closeable {
         }
     }
 
-    private class ServerInitializer extends ChannelInitializer<Channel> {
+    private final class ServerInitializer extends ChannelInitializer<Channel> {
         private final ChannelInitializer<Channel> original;
 
         public ServerInitializer(ChannelInitializer<Channel> original) {
@@ -286,7 +288,7 @@ public final class GongdaobeiVelocityBandwidthCounter implements Closeable {
         @Override
         protected void initChannel(@Nonnull Channel ch) throws Exception {
             try {
-                Objects.requireNonNull(ciInitCMethod).invoke(this.original, ch);
+                Handles.ciInitCMethod.invoke(this.original, ch);
                 // noinspection RedundantThrows
                 ch.pipeline().addBefore("frame-encoder", RX_NAME, new ChannelInboundHandlerAdapter() {
                     @Override
