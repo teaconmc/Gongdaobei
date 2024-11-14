@@ -17,10 +17,15 @@
  */
 package org.teacon.gongdaobei;
 
+import com.google.common.base.CaseFormat;
 import com.google.common.net.HostAndPort;
 import io.netty.buffer.ByteBuf;
+import io.netty.buffer.ByteBufUtil;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.*;
+import io.netty.handler.codec.CodecException;
+import io.netty.handler.codec.DecoderException;
+import io.netty.handler.codec.EncoderException;
 
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
@@ -86,79 +91,153 @@ public final class GongdaobeiVelocityBandwidthCounter implements Closeable {
         return Collections.unmodifiableMap(collected);
     }
 
-    private Entry calculateSize(boolean tx, boolean rx, ByteBuf msg, Entry entry) {
-        if (entry.compressed()) {
-            while (msg.isReadable()) {
-                // detect frames whose header contains a size if it is tx + compressed
-                // noinspection UnnecessaryLocalVariable
-                var msgContainsFrames = tx;
-                var msgFrom = msg.readerIndex();
-                var msgSize = msg.readableBytes();
-                if (msgContainsFrames) {
-                    var msgSizeOptional = GongdaobeiVelocityBandwidthCounter.this.readVarInt(msg);
-                    if (msgSizeOptional.isEmpty() || msgSizeOptional.getAsInt() > msg.readableBytes()) {
-                        msg.readerIndex(msgFrom);
-                        break;
-                    }
-                    msgSize = msgSizeOptional.getAsInt();
-                    msgFrom = msg.readerIndex();
-                }
-                if (msgSize > 0) {
-                    var msgTrimmed = 0;
-                    var msgUncompressed = this.readVarInt(msg).orElse(0);
-                    var msgPrefixedSize = this.prefixedSizeVarInt(msgSize);
-                    if (msgUncompressed > 0) {
-                        msgTrimmed = Math.max(0, this.prefixedSizeVarInt(msgUncompressed) - msgSize);
-                    }
-                    if (tx) {
-                        entry = entry.increaseTx(msgPrefixedSize, msgPrefixedSize + msgTrimmed);
-                    }
-                    if (rx) {
-                        entry = entry.increaseRx(msgPrefixedSize, msgPrefixedSize + msgTrimmed);
-                    }
-                }
-                msg.readerIndex(msgFrom + msgSize);
+    private Entry calculateSize(NetworkChannel channel, ByteBuf msg, Entry entry) {
+        try {
+            if (msg.writerIndex() >= 5_000_000) {
+                throw new CodecException("Buffered message too large (" + msg.writerIndex() + " bytes)");
+            } else if (entry.txWithFrames() && channel.tx()) {
+                return this.calculateSizeWithFrames(channel, msg, entry);
+            } else if (entry.compressed()) {
+                return this.calculateSizeCompressed(channel, msg, entry);
+            } else {
+                return this.calculateSizeUncompressed(channel, msg, entry);
             }
-            return entry;
+        } catch (CodecException e) {
+            var joiner = new StringJoiner(", ", "Failed to read packet: ", "");
+            joiner.add(CaseFormat.UPPER_UNDERSCORE.to(CaseFormat.LOWER_HYPHEN, channel.name()));
+            joiner.add(entry.txWithFrames() && channel.tx() ? "with-frames" : "without-frames");
+            joiner.add(entry.compressed() ? "zlib-enabled" : "zlib-disabled");
+            joiner.add(String.format("index: %08x", msg.readerIndex()));
+            if (msg.isReadable()) {
+                joiner.add("hexdump: \n" + ByteBufUtil.prettyHexDump(msg, 0, msg.writerIndex()));
+            }
+            this.logger.log(Level.WARNING, joiner.toString());
+            throw channel.wrap(e);
         }
-        if (msg.isReadable()) {
-            var msgSize = msg.readableBytes();
-            var msgPrefixedSize = this.prefixedSizeVarInt(msgSize);
-            var msgId = this.readVarInt(msg).orElse(-1);
-            if (msgId == 0x03) {
-                var msgCompressBound = this.readVarInt(msg).orElse(-1);
-                entry = entry.markCompressed(msgCompressBound >= 0);
+    }
+
+    private Entry calculateSizeWithFrames(NetworkChannel channel, ByteBuf msg, Entry entry) {
+        while (true) {
+            var msgFrom = msg.readerIndex();
+            var msgSizeOptional = this.readVarInt(msg, 21);
+            if (msgSizeOptional.isEmpty() || msgSizeOptional.getAsInt() > msg.readableBytes()) {
+                msg.readerIndex(msgFrom);
+                return entry;
             }
-            if (tx) {
-                entry = entry.increaseTx(msgPrefixedSize, msgPrefixedSize);
+            var msgSize = msgSizeOptional.getAsInt();
+            if (msgSize > 0) {
+                msg.discardSomeReadBytes();
+                if (entry.compressed()) {
+                    entry = this.calculateSizeCompressed(channel, msg.readSlice(msgSize), entry);
+                } else {
+                    entry = this.calculateSizeUncompressed(channel, msg.readSlice(msgSize), entry);
+                }
             }
-            if (rx) {
-                entry = entry.increaseRx(msgPrefixedSize, msgPrefixedSize);
-            }
-            msg.skipBytes(msg.readableBytes());
-            return entry;
         }
+    }
+
+    private Entry calculateSizeCompressed(NetworkChannel channel, ByteBuf msg, Entry entry) {
+        var msgTrimmed = 0;
+        var msgSize = msg.readableBytes();
+        var msgUncompressed = this.readVarInt(msg, 32).orElse(0);
+        if (msgUncompressed > 0) {
+            msgTrimmed = Math.max(0, this.prefixedSizeVarInt(msgUncompressed) - msgSize);
+        }
+        var msgPrefixedSize = this.prefixedSizeVarInt(msgSize);
+        if (channel.tx()) {
+            entry = entry.increaseTx(msgPrefixedSize, msgPrefixedSize + msgTrimmed);
+        }
+        if (channel.rx()) {
+            entry = entry.increaseRx(msgPrefixedSize, msgPrefixedSize + msgTrimmed);
+        }
+        msg.skipBytes(msg.readableBytes());
+        return entry;
+    }
+
+    private Entry calculateSizeUncompressed(NetworkChannel channel, ByteBuf msg, Entry entry) {
+        var msgSize = msg.readableBytes();
+        var msgId = this.readVarInt(msg, 32).orElse(-1);
+        if (channel.compress(msgId)) {
+            var msgCompressBound = this.readVarInt(msg, 31).orElse(-1);
+            entry = entry.markCompressed(msgCompressBound >= 0);
+            if (channel.tx()) {
+                entry = entry.markTxWithFrames();
+            }
+        }
+        var msgPrefixedSize = this.prefixedSizeVarInt(msgSize);
+        if (channel.tx()) {
+            entry = entry.increaseTx(msgPrefixedSize, msgPrefixedSize);
+        }
+        if (channel.rx()) {
+            entry = entry.increaseRx(msgPrefixedSize, msgPrefixedSize);
+        }
+        msg.skipBytes(msg.readableBytes());
         return entry;
     }
 
     private int prefixedSizeVarInt(int size) {
-        return (31 - Integer.numberOfLeadingZeros(size)) / 7 + 1 + size;
+        return (38 - Integer.numberOfLeadingZeros(size)) / 7 + size;
     }
 
-    private OptionalInt readVarInt(ByteBuf msg) {
-        var result = 0;
-        var readable = msg.readableBytes();
-        for (var i = 0; i < 5; ++i) {
-            if (i >= readable) {
-                return OptionalInt.empty();
-            }
-            var b = msg.readByte();
-            result |= (b & (1 << 7) - 1) << i * 7;
-            if ((b >> 7) == 0) {
-                return OptionalInt.of(result);
-            }
+    private OptionalInt readVarInt(ByteBuf msg, int allowedMaximumBits) {
+        // bit 0-6
+        if (!msg.isReadable()) {
+            return OptionalInt.empty();
         }
-        return OptionalInt.empty();
+        var b0 = msg.readByte();
+        if ((b0 & 0xFF & ~0 << Math.min(allowedMaximumBits, 8)) != 0) {
+            throw new CodecException(String.format("Illegal first byte " +
+                    "of var int: 0x%02x (allowed bits: %d)", b0, allowedMaximumBits));
+        }
+        if (b0 >= 0) {
+            return OptionalInt.of(b0);
+        }
+        // bit 7-13
+        if (!msg.isReadable()) {
+            return OptionalInt.empty();
+        }
+        var b1 = msg.readByte();
+        if ((b1 & 0xFF & ~0 << Math.min(allowedMaximumBits, 15) - 7) != 0) {
+            throw new CodecException(String.format("Illegal second byte " +
+                    "of var int: 0x%02x (allowed bits: %d)", b1, allowedMaximumBits));
+        }
+        if (b1 >= 0) {
+            return OptionalInt.of(b0 & 0x7F | b1 << 7);
+        }
+        // bit 14-20
+        if (!msg.isReadable()) {
+            return OptionalInt.empty();
+        }
+        var b2 = msg.readByte();
+        if ((b2 & 0xFF & ~0 << Math.min(allowedMaximumBits, 22) - 14) != 0) {
+            throw new CodecException(String.format("Illegal third byte " +
+                    "of var int: 0x%02x (allowed bits: %d)", b2, allowedMaximumBits));
+        }
+        if (b2 >= 0) {
+            return OptionalInt.of(b0 & 0x7F | b1 << 7 & 0x3FFF | b2 << 14);
+        }
+        // bit 21-27
+        if (!msg.isReadable()) {
+            return OptionalInt.empty();
+        }
+        var b3 = msg.readByte();
+        if ((b3 & 0xFF & ~0 << Math.min(allowedMaximumBits, 29) - 21) != 0) {
+            throw new CodecException(String.format("Illegal fourth byte " +
+                    "of var int: 0x%02x (allowed bits: %d)", b3, allowedMaximumBits));
+        }
+        if (b3 >= 0) {
+            return OptionalInt.of(b0 & 0x7F | b1 << 7 & 0x3FFF | b2 << 14 & 0x1FFFFF | b3);
+        }
+        // bit 28-31
+        if (!msg.isReadable()) {
+            return OptionalInt.empty();
+        }
+        var b4 = msg.readByte();
+        if ((b4 & 0xFF & ~0 << Math.min(allowedMaximumBits, 32) - 28) != 0) {
+            throw new CodecException(String.format("Illegal fifth byte " +
+                    "of var int: 0x%02x (allowed bits: %d)", b4, allowedMaximumBits));
+        }
+        return OptionalInt.of(b0 & 0x7F | b1 << 7 & 0x3FFF | b2 << 14 & 0x1FFFFF | b3 << 21 & 0xFFFFFFF | b4 << 28);
     }
 
     @Override
@@ -235,8 +314,8 @@ public final class GongdaobeiVelocityBandwidthCounter implements Closeable {
                                 var addr = (InetSocketAddress) ch.remoteAddress();
                                 GongdaobeiVelocityBandwidthCounter.this.backendEntries.compute(
                                         HostAndPort.fromParts(addr.getHostString(), addr.getPort()),
-                                        (hostAndPort, value) -> GongdaobeiVelocityBandwidthCounter.this
-                                                .calculateSize(false, true, retained, Entry.emptyIfNull(value)));
+                                        (key, value) -> GongdaobeiVelocityBandwidthCounter.this.calculateSize(
+                                                NetworkChannel.SERVER_OUTGOING, retained, Entry.emptyIfNull(value)));
                             } finally {
                                 retained.release();
                                 ctx.fireChannelRead(msg);
@@ -258,10 +337,11 @@ public final class GongdaobeiVelocityBandwidthCounter implements Closeable {
                                 var addr = (InetSocketAddress) ch.remoteAddress();
                                 var old = this.cum == null ? Unpooled.EMPTY_BUFFER : this.cum;
                                 this.cum = COMPOSITE_CUMULATOR.cumulate(ctx.alloc(), old, buf.retainedSlice());
+                                // noinspection DataFlowIssue
                                 GongdaobeiVelocityBandwidthCounter.this.backendEntries.compute(
                                         HostAndPort.fromParts(addr.getHostString(), addr.getPort()),
-                                        (hostAndPort, value) -> GongdaobeiVelocityBandwidthCounter.this
-                                                .calculateSize(true, false, this.cum, Entry.emptyIfNull(value)));
+                                        (key, value) -> GongdaobeiVelocityBandwidthCounter.this.calculateSize(
+                                                NetworkChannel.SERVER_INCOMING, this.cum, Entry.emptyIfNull(value)));
                             } finally {
                                 // release the cumulated buf if it has been fully read
                                 if (this.cum != null && !this.cum.isReadable()) {
@@ -313,9 +393,9 @@ public final class GongdaobeiVelocityBandwidthCounter implements Closeable {
                         if (GongdaobeiVelocityBandwidthCounter.this.enabled && msg instanceof ByteBuf buf) {
                             var retained = buf.retainedSlice();
                             try {
-                                GongdaobeiVelocityBandwidthCounter.this.serverEntry
-                                        .updateAndGet(value -> GongdaobeiVelocityBandwidthCounter.this
-                                                .calculateSize(false, true, retained, Entry.emptyIfNull(value)));
+                                GongdaobeiVelocityBandwidthCounter.this.serverEntry.updateAndGet(
+                                        value -> GongdaobeiVelocityBandwidthCounter.this.calculateSize(
+                                                NetworkChannel.PLAYER_INCOMING, retained, Entry.emptyIfNull(value)));
                             } finally {
                                 retained.release();
                                 ctx.fireChannelRead(msg);
@@ -336,9 +416,10 @@ public final class GongdaobeiVelocityBandwidthCounter implements Closeable {
                             try {
                                 var old = this.cum == null ? Unpooled.EMPTY_BUFFER : this.cum;
                                 this.cum = COMPOSITE_CUMULATOR.cumulate(ctx.alloc(), old, buf.retainedSlice());
+                                // noinspection DataFlowIssue
                                 GongdaobeiVelocityBandwidthCounter.this.serverEntry.updateAndGet(
-                                        value -> GongdaobeiVelocityBandwidthCounter.this
-                                                .calculateSize(true, false, this.cum, Entry.emptyIfNull(value)));
+                                        value -> GongdaobeiVelocityBandwidthCounter.this.calculateSize(
+                                                NetworkChannel.PLAYER_OUTGOING, this.cum, Entry.emptyIfNull(value)));
                             } finally {
                                 // release the cumulated buf if it has been fully read
                                 if (this.cum != null && !this.cum.isReadable()) {
@@ -356,7 +437,7 @@ public final class GongdaobeiVelocityBandwidthCounter implements Closeable {
                     public void close(ChannelHandlerContext ctx, ChannelPromise promise) throws Exception {
                         // release the cumulated buf
                         if (this.cum != null) {
-                            this.cum.release();
+                            this.cum.discardSomeReadBytes().release();
                             this.cum = null;
                         }
                         ctx.close(promise);
@@ -372,24 +453,52 @@ public final class GongdaobeiVelocityBandwidthCounter implements Closeable {
     }
 
     public record Entry(boolean compressed, long tx, long rx,
-                        long txUncompressed, long rxUncompressed, OffsetDateTime lastUpdate) {
+                        long txUncompressed, long rxUncompressed, boolean txWithFrames, OffsetDateTime lastUpdate) {
         public static Entry emptyIfNull(@Nullable Entry entry) {
-            return entry != null ? entry : new Entry(false, 0L, 0L, 0L, 0L, OffsetDateTime.now());
+            return entry != null ? entry : new Entry(false, 0L, 0L, 0L, 0L, false, OffsetDateTime.now());
+        }
+
+        public Entry markTxWithFrames() {
+            return new Entry(this.compressed, this.tx, this.rx,
+                    this.txUncompressed, this.rxUncompressed, true, this.lastUpdate);
         }
 
         public Entry markCompressed(boolean compressed) {
             return new Entry(compressed, this.tx, this.rx,
-                    this.txUncompressed, this.rxUncompressed, this.lastUpdate);
+                    this.txUncompressed, this.rxUncompressed, this.txWithFrames, this.lastUpdate);
         }
 
         public Entry increaseTx(int compressed, int uncompressed) {
             return new Entry(this.compressed, this.tx + compressed, this.rx,
-                    this.txUncompressed + uncompressed, this.rxUncompressed, OffsetDateTime.now());
+                    this.txUncompressed + uncompressed, this.rxUncompressed, this.txWithFrames, OffsetDateTime.now());
         }
 
         public Entry increaseRx(int compressed, int uncompressed) {
             return new Entry(this.compressed, this.tx, this.rx + compressed,
-                    this.txUncompressed, this.rxUncompressed + uncompressed, OffsetDateTime.now());
+                    this.txUncompressed, this.rxUncompressed + uncompressed, this.txWithFrames, OffsetDateTime.now());
+        }
+    }
+
+    public enum NetworkChannel {
+        PLAYER_INCOMING, PLAYER_OUTGOING, SERVER_INCOMING, SERVER_OUTGOING;
+
+        public boolean tx() {
+            return this == PLAYER_OUTGOING || this == SERVER_INCOMING;
+        }
+
+        public boolean rx() {
+            return this == PLAYER_INCOMING || this == SERVER_OUTGOING;
+        }
+
+        public boolean compress(int id) {
+            return (this == PLAYER_INCOMING || this == SERVER_INCOMING) && id == 0x03;
+        }
+
+        public CodecException wrap(RuntimeException e) {
+            return switch (this) {
+                case PLAYER_INCOMING, SERVER_INCOMING -> new DecoderException(e);
+                case PLAYER_OUTGOING, SERVER_OUTGOING -> new EncoderException(e);
+            };
         }
     }
 }
