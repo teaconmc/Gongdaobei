@@ -91,7 +91,8 @@ public final class GongdaobeiVelocityBandwidthCounter implements Closeable {
         return Collections.unmodifiableMap(collected);
     }
 
-    private Entry calculateSize(NetworkChannel channel, ByteBuf msg, Entry entry) {
+    private Entry calculateSize(ChannelHandlerContext ctx, NetworkChannel channel, ByteBuf msg, Entry entry) {
+        var index = msg.readerIndex();
         try {
             if (msg.writerIndex() >= 5_000_000) {
                 throw new CodecException("Buffered message too large (" + msg.writerIndex() + " bytes)");
@@ -107,9 +108,12 @@ public final class GongdaobeiVelocityBandwidthCounter implements Closeable {
             joiner.add(CaseFormat.UPPER_UNDERSCORE.to(CaseFormat.LOWER_HYPHEN, channel.name()));
             joiner.add(entry.txWithFrames() && channel.tx() ? "with-frames" : "without-frames");
             joiner.add(entry.compressed() ? "zlib-enabled" : "zlib-disabled");
-            joiner.add(String.format("index: %08x", msg.readerIndex()));
+            joiner.add("pipeline: " + String.join(" | ", ctx.pipeline().names()));
+            joiner.add(String.format("index: %08x", index));
             if (msg.isReadable()) {
-                joiner.add("hexdump: \n" + ByteBufUtil.prettyHexDump(msg, 0, msg.writerIndex()));
+                var builder = new StringBuilder("hexdump: \n");
+                ByteBufUtil.appendPrettyHexDump(builder, msg, 0, msg.writerIndex());
+                joiner.add(builder);
             }
             this.logger.log(Level.WARNING, joiner.toString());
             throw channel.wrap(e);
@@ -314,7 +318,7 @@ public final class GongdaobeiVelocityBandwidthCounter implements Closeable {
                                 var addr = (InetSocketAddress) ch.remoteAddress();
                                 GongdaobeiVelocityBandwidthCounter.this.backendEntries.compute(
                                         HostAndPort.fromParts(addr.getHostString(), addr.getPort()),
-                                        (key, value) -> GongdaobeiVelocityBandwidthCounter.this.calculateSize(
+                                        (key, value) -> GongdaobeiVelocityBandwidthCounter.this.calculateSize(ctx,
                                                 NetworkChannel.SERVER_OUTGOING, retained, Entry.emptyIfNull(value)));
                             } finally {
                                 retained.release();
@@ -340,7 +344,7 @@ public final class GongdaobeiVelocityBandwidthCounter implements Closeable {
                                 // noinspection DataFlowIssue
                                 GongdaobeiVelocityBandwidthCounter.this.backendEntries.compute(
                                         HostAndPort.fromParts(addr.getHostString(), addr.getPort()),
-                                        (key, value) -> GongdaobeiVelocityBandwidthCounter.this.calculateSize(
+                                        (key, value) -> GongdaobeiVelocityBandwidthCounter.this.calculateSize(ctx,
                                                 NetworkChannel.SERVER_INCOMING, this.cum, Entry.emptyIfNull(value)));
                             } finally {
                                 // release the cumulated buf if it has been fully read
@@ -394,7 +398,7 @@ public final class GongdaobeiVelocityBandwidthCounter implements Closeable {
                             var retained = buf.retainedSlice();
                             try {
                                 GongdaobeiVelocityBandwidthCounter.this.serverEntry.updateAndGet(
-                                        value -> GongdaobeiVelocityBandwidthCounter.this.calculateSize(
+                                        value -> GongdaobeiVelocityBandwidthCounter.this.calculateSize(ctx,
                                                 NetworkChannel.PLAYER_INCOMING, retained, Entry.emptyIfNull(value)));
                             } finally {
                                 retained.release();
@@ -418,7 +422,7 @@ public final class GongdaobeiVelocityBandwidthCounter implements Closeable {
                                 this.cum = COMPOSITE_CUMULATOR.cumulate(ctx.alloc(), old, buf.retainedSlice());
                                 // noinspection DataFlowIssue
                                 GongdaobeiVelocityBandwidthCounter.this.serverEntry.updateAndGet(
-                                        value -> GongdaobeiVelocityBandwidthCounter.this.calculateSize(
+                                        value -> GongdaobeiVelocityBandwidthCounter.this.calculateSize(ctx,
                                                 NetworkChannel.PLAYER_OUTGOING, this.cum, Entry.emptyIfNull(value)));
                             } finally {
                                 // release the cumulated buf if it has been fully read
