@@ -35,15 +35,13 @@ import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
 import java.lang.invoke.VarHandle;
 import java.net.InetSocketAddress;
-import java.time.OffsetDateTime;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.UnaryOperator;
 import java.util.logging.Level;
 import java.util.logging.Logger;
-
-import static io.netty.handler.codec.ByteToMessageDecoder.COMPOSITE_CUMULATOR;
 
 public final class GongdaobeiVelocityBandwidthCounter implements Closeable {
     private static final String TX_NAME = "gongdaobei-tx-bandwidth-counter";
@@ -91,23 +89,23 @@ public final class GongdaobeiVelocityBandwidthCounter implements Closeable {
         return Collections.unmodifiableMap(collected);
     }
 
-    private Entry calculateSize(ChannelHandlerContext ctx, NetworkChannel channel, ByteBuf msg, Entry entry) {
+    private UnaryOperator<Entry> calculateSize(ChannelHandlerContext ctx,
+                                               NetworkChannel channel, ByteBuf msg, int[] compressBound) {
         var index = msg.readerIndex();
         try {
             if (msg.writerIndex() >= 5_000_000) {
                 throw new CodecException("Buffered message too large (" + msg.writerIndex() + " bytes)");
-            } else if (entry.txWithFrames() && channel.tx()) {
-                return this.calculateSizeWithFrames(channel, msg, entry);
-            } else if (entry.compressed()) {
-                return this.calculateSizeCompressed(channel, msg, entry);
+            } else if (compressBound[0] < 0) {
+                return this.calculateSizeUncompressed(channel, msg, compressBound);
+            } else if (channel.tx()) {
+                return this.calculateSizeWithFrames(channel, msg, compressBound);
             } else {
-                return this.calculateSizeUncompressed(channel, msg, entry);
+                return this.calculateSizeCompressed(channel, msg);
             }
         } catch (CodecException e) {
             var joiner = new StringJoiner(", ", "Failed to read packet: ", "");
             joiner.add(CaseFormat.UPPER_UNDERSCORE.to(CaseFormat.LOWER_HYPHEN, channel.name()));
-            joiner.add(entry.txWithFrames() && channel.tx() ? "with-frames" : "without-frames");
-            joiner.add(entry.compressed() ? "zlib-enabled" : "zlib-disabled");
+            joiner.add("compress-bound: " + compressBound[0]);
             joiner.add("pipeline: " + String.join(" | ", ctx.pipeline().names()));
             joiner.add(String.format("index: %08x", index));
             if (msg.isReadable()) {
@@ -120,60 +118,74 @@ public final class GongdaobeiVelocityBandwidthCounter implements Closeable {
         }
     }
 
-    private Entry calculateSizeWithFrames(NetworkChannel channel, ByteBuf msg, Entry entry) {
+    private UnaryOperator<Entry> calculateSizeWithFrames(NetworkChannel channel, ByteBuf msg, int[] compressBound) {
+        var results = new ArrayList<UnaryOperator<Entry>>(1);
         while (true) {
             var msgFrom = msg.readerIndex();
             var msgSizeOptional = this.readVarInt(msg, 21);
             if (msgSizeOptional.isEmpty() || msgSizeOptional.getAsInt() > msg.readableBytes()) {
                 msg.readerIndex(msgFrom);
-                return entry;
+                return switch (results.size()) {
+                    case 0 -> Entry::emptyIfNull;
+                    case 1 -> results.get(0);
+                    default -> entry -> {
+                        for (var operator : results) {
+                            entry = operator.apply(entry);
+                        }
+                        return entry;
+                    };
+                };
             }
             var msgSize = msgSizeOptional.getAsInt();
             if (msgSize > 0) {
                 msg.discardSomeReadBytes();
-                if (entry.compressed()) {
-                    entry = this.calculateSizeCompressed(channel, msg.readSlice(msgSize), entry);
+                if (compressBound[0] >= 0) {
+                    results.add(this.calculateSizeCompressed(channel, msg.readSlice(msgSize)));
                 } else {
-                    entry = this.calculateSizeUncompressed(channel, msg.readSlice(msgSize), entry);
+                    results.add(this.calculateSizeUncompressed(channel, msg.readSlice(msgSize), compressBound));
                 }
             }
         }
     }
 
-    private Entry calculateSizeCompressed(NetworkChannel channel, ByteBuf msg, Entry entry) {
+    private UnaryOperator<Entry> calculateSizeCompressed(NetworkChannel channel, ByteBuf msg) {
         var msgTrimmed = 0;
         var msgSize = msg.readableBytes();
         var msgUncompressed = this.readVarInt(msg, 32).orElse(0);
+        var resultUnaryOperator = UnaryOperator.<Entry>identity();
         if (msgUncompressed > 0) {
             msgTrimmed = Math.max(0, this.prefixedSizeVarInt(msgUncompressed) - msgSize);
         }
         var msgPrefixedSize = this.prefixedSizeVarInt(msgSize);
+        var msgSizeUncompressed = msgTrimmed + msgPrefixedSize;
+        // noinspection DuplicatedCode
         if (channel.tx()) {
-            entry = entry.increaseTx(msgPrefixedSize, msgPrefixedSize + msgTrimmed);
+            resultUnaryOperator = entry -> Entry.emptyIfNull(entry).increaseTx(msgPrefixedSize, msgSizeUncompressed);
         }
         if (channel.rx()) {
-            entry = entry.increaseRx(msgPrefixedSize, msgPrefixedSize + msgTrimmed);
+            resultUnaryOperator = entry -> Entry.emptyIfNull(entry).increaseRx(msgPrefixedSize, msgSizeUncompressed);
         }
         msg.skipBytes(msg.readableBytes());
-        return entry;
+        return resultUnaryOperator;
     }
 
-    private Entry calculateSizeUncompressed(NetworkChannel channel, ByteBuf msg, Entry entry) {
+    private UnaryOperator<Entry> calculateSizeUncompressed(NetworkChannel channel, ByteBuf msg, int[] compressBound) {
         var msgSize = msg.readableBytes();
         var msgId = this.readVarInt(msg, 32).orElse(-1);
+        var resultUnaryOperator = UnaryOperator.<Entry>identity();
         if (channel.compress(msgId)) {
-            var msgCompressBound = this.readVarInt(msg, 31).orElse(-1);
-            entry = entry.markCompressed(msgCompressBound >= 0).markTxWithFrames();
+            compressBound[0] = this.readVarInt(msg, 31).orElse(-1);
         }
         var msgPrefixedSize = this.prefixedSizeVarInt(msgSize);
+        // noinspection DuplicatedCode
         if (channel.tx()) {
-            entry = entry.increaseTx(msgPrefixedSize, msgPrefixedSize);
+            resultUnaryOperator = entry -> Entry.emptyIfNull(entry).increaseTx(msgPrefixedSize, msgPrefixedSize);
         }
         if (channel.rx()) {
-            entry = entry.increaseRx(msgPrefixedSize, msgPrefixedSize);
+            resultUnaryOperator = entry -> Entry.emptyIfNull(entry).increaseRx(msgPrefixedSize, msgPrefixedSize);
         }
         msg.skipBytes(msg.readableBytes());
-        return entry;
+        return resultUnaryOperator;
     }
 
     private int prefixedSizeVarInt(int size) {
@@ -304,21 +316,27 @@ public final class GongdaobeiVelocityBandwidthCounter implements Closeable {
         protected void initChannel(@Nonnull Channel ch) throws Exception {
             try {
                 Handles.ciInitCMethod.invoke(this.original, ch);
+                // compression threshold
+                var compressionThreshold = new int[]{-1};
+                // rx cumulation
+                var rxCumulation = Unpooled.buffer(259);
+                // tx cumulation
+                var txCumulation = Unpooled.buffer(259);
                 // noinspection RedundantThrows
                 ch.pipeline().addAfter("frame-encoder", RX_NAME, new ChannelInboundHandlerAdapter() {
                     @Override
                     public void channelRead(@Nonnull ChannelHandlerContext ctx,
                                             @Nonnull Object msg) throws Exception {
                         if (GongdaobeiVelocityBandwidthCounter.this.enabled && msg instanceof ByteBuf buf) {
-                            var retained = buf.retainedSlice();
                             try {
                                 var addr = (InetSocketAddress) ch.remoteAddress();
-                                GongdaobeiVelocityBandwidthCounter.this.backendEntries.compute(
-                                        HostAndPort.fromParts(addr.getHostString(), addr.getPort()),
-                                        (key, value) -> GongdaobeiVelocityBandwidthCounter.this.calculateSize(ctx,
-                                                NetworkChannel.SERVER_OUTGOING, retained, Entry.emptyIfNull(value)));
+                                rxCumulation.writeBytes(buf, buf.readerIndex(), buf.readableBytes());
+                                var operator = GongdaobeiVelocityBandwidthCounter.this.calculateSize(
+                                        ctx, NetworkChannel.SERVER_OUTGOING, rxCumulation, compressionThreshold);
+                                GongdaobeiVelocityBandwidthCounter.this.backendEntries.compute(HostAndPort.
+                                        fromParts(addr.getHostString(), addr.getPort()), (k, v) -> operator.apply(v));
                             } finally {
-                                retained.release();
+                                rxCumulation.discardSomeReadBytes();
                                 ctx.fireChannelRead(msg);
                             }
                         } else {
@@ -328,27 +346,19 @@ public final class GongdaobeiVelocityBandwidthCounter implements Closeable {
                 });
                 // noinspection RedundantThrows
                 ch.pipeline().addAfter("frame-encoder", TX_NAME, new ChannelOutboundHandlerAdapter() {
-                    private @Nullable ByteBuf cum = null;
-
                     @Override
                     public void write(ChannelHandlerContext ctx,
                                       Object msg, ChannelPromise promise) throws Exception {
                         if (GongdaobeiVelocityBandwidthCounter.this.enabled && msg instanceof ByteBuf buf) {
                             try {
                                 var addr = (InetSocketAddress) ch.remoteAddress();
-                                var old = this.cum == null ? Unpooled.EMPTY_BUFFER : this.cum;
-                                this.cum = COMPOSITE_CUMULATOR.cumulate(ctx.alloc(), old, buf.retainedSlice());
-                                // noinspection DataFlowIssue
-                                GongdaobeiVelocityBandwidthCounter.this.backendEntries.compute(
-                                        HostAndPort.fromParts(addr.getHostString(), addr.getPort()),
-                                        (key, value) -> GongdaobeiVelocityBandwidthCounter.this.calculateSize(ctx,
-                                                NetworkChannel.SERVER_INCOMING, this.cum, Entry.emptyIfNull(value)));
+                                txCumulation.writeBytes(buf, buf.readerIndex(), buf.readableBytes());
+                                var operator = GongdaobeiVelocityBandwidthCounter.this.calculateSize(
+                                        ctx, NetworkChannel.SERVER_INCOMING, txCumulation, compressionThreshold);
+                                GongdaobeiVelocityBandwidthCounter.this.backendEntries.compute(HostAndPort.
+                                        fromParts(addr.getHostString(), addr.getPort()), (k, v) -> operator.apply(v));
                             } finally {
-                                // release the cumulated buf if it has been fully read
-                                if (this.cum != null && !this.cum.isReadable()) {
-                                    this.cum.release();
-                                    this.cum = null;
-                                }
+                                txCumulation.discardSomeReadBytes();
                                 ctx.write(msg, promise);
                             }
                         } else {
@@ -358,11 +368,7 @@ public final class GongdaobeiVelocityBandwidthCounter implements Closeable {
 
                     @Override
                     public void close(ChannelHandlerContext ctx, ChannelPromise promise) throws Exception {
-                        // release the cumulated buf
-                        if (this.cum != null) {
-                            this.cum.release();
-                            this.cum = null;
-                        }
+                        txCumulation.discardReadBytes();
                         ctx.close(promise);
                     }
                 });
@@ -386,19 +392,25 @@ public final class GongdaobeiVelocityBandwidthCounter implements Closeable {
         protected void initChannel(@Nonnull Channel ch) throws Exception {
             try {
                 Handles.ciInitCMethod.invoke(this.original, ch);
+                // compression threshold
+                var compressionThreshold = new int[]{-1};
+                // rx cumulation
+                var rxCumulation = Unpooled.buffer(259);
+                // tx cumulation
+                var txCumulation = Unpooled.buffer(259);
                 // noinspection RedundantThrows
                 ch.pipeline().addAfter("frame-encoder", RX_NAME, new ChannelInboundHandlerAdapter() {
                     @Override
                     public void channelRead(@Nonnull ChannelHandlerContext ctx,
                                             @Nonnull Object msg) throws Exception {
                         if (GongdaobeiVelocityBandwidthCounter.this.enabled && msg instanceof ByteBuf buf) {
-                            var retained = buf.retainedSlice();
                             try {
-                                GongdaobeiVelocityBandwidthCounter.this.serverEntry.updateAndGet(
-                                        value -> GongdaobeiVelocityBandwidthCounter.this.calculateSize(ctx,
-                                                NetworkChannel.PLAYER_INCOMING, retained, Entry.emptyIfNull(value)));
+                                rxCumulation.writeBytes(buf, buf.readerIndex(), buf.readableBytes());
+                                var operator = GongdaobeiVelocityBandwidthCounter.this.calculateSize(
+                                        ctx, NetworkChannel.PLAYER_INCOMING, rxCumulation, compressionThreshold);
+                                GongdaobeiVelocityBandwidthCounter.this.serverEntry.updateAndGet(operator);
                             } finally {
-                                retained.release();
+                                rxCumulation.discardSomeReadBytes();
                                 ctx.fireChannelRead(msg);
                             }
                         } else {
@@ -408,25 +420,17 @@ public final class GongdaobeiVelocityBandwidthCounter implements Closeable {
                 });
                 // noinspection RedundantThrows
                 ch.pipeline().addAfter("frame-encoder", TX_NAME, new ChannelOutboundHandlerAdapter() {
-                    private @Nullable ByteBuf cum = null;
-
                     @Override
                     public void write(ChannelHandlerContext ctx,
                                       Object msg, ChannelPromise promise) throws Exception {
                         if (GongdaobeiVelocityBandwidthCounter.this.enabled && msg instanceof ByteBuf buf) {
                             try {
-                                var old = this.cum == null ? Unpooled.EMPTY_BUFFER : this.cum;
-                                this.cum = COMPOSITE_CUMULATOR.cumulate(ctx.alloc(), old, buf.retainedSlice());
-                                // noinspection DataFlowIssue
-                                GongdaobeiVelocityBandwidthCounter.this.serverEntry.updateAndGet(
-                                        value -> GongdaobeiVelocityBandwidthCounter.this.calculateSize(ctx,
-                                                NetworkChannel.PLAYER_OUTGOING, this.cum, Entry.emptyIfNull(value)));
+                                txCumulation.writeBytes(buf, buf.readerIndex(), buf.readableBytes());
+                                var operator = GongdaobeiVelocityBandwidthCounter.this.calculateSize(
+                                        ctx, NetworkChannel.PLAYER_OUTGOING, txCumulation, compressionThreshold);
+                                GongdaobeiVelocityBandwidthCounter.this.serverEntry.updateAndGet(operator);
                             } finally {
-                                // release the cumulated buf if it has been fully read
-                                if (this.cum != null && !this.cum.isReadable()) {
-                                    this.cum.release();
-                                    this.cum = null;
-                                }
+                                txCumulation.discardSomeReadBytes();
                                 ctx.write(msg, promise);
                             }
                         } else {
@@ -436,11 +440,7 @@ public final class GongdaobeiVelocityBandwidthCounter implements Closeable {
 
                     @Override
                     public void close(ChannelHandlerContext ctx, ChannelPromise promise) throws Exception {
-                        // release the cumulated buf
-                        if (this.cum != null) {
-                            this.cum.discardSomeReadBytes().release();
-                            this.cum = null;
-                        }
+                        txCumulation.discardReadBytes();
                         ctx.close(promise);
                     }
                 });
@@ -453,30 +453,17 @@ public final class GongdaobeiVelocityBandwidthCounter implements Closeable {
         }
     }
 
-    public record Entry(boolean compressed, long tx, long rx,
-                        long txUncompressed, long rxUncompressed, boolean txWithFrames, OffsetDateTime lastUpdate) {
+    public record Entry(long tx, long rx, long txUncompressed, long rxUncompressed) {
         public static Entry emptyIfNull(@Nullable Entry entry) {
-            return entry != null ? entry : new Entry(false, 0L, 0L, 0L, 0L, false, OffsetDateTime.now());
-        }
-
-        public Entry markTxWithFrames() {
-            return new Entry(this.compressed, this.tx, this.rx,
-                    this.txUncompressed, this.rxUncompressed, true, this.lastUpdate);
-        }
-
-        public Entry markCompressed(boolean compressed) {
-            return new Entry(compressed, this.tx, this.rx,
-                    this.txUncompressed, this.rxUncompressed, this.txWithFrames, this.lastUpdate);
+            return entry != null ? entry : new Entry(0L, 0L, 0L, 0L);
         }
 
         public Entry increaseTx(int compressed, int uncompressed) {
-            return new Entry(this.compressed, this.tx + compressed, this.rx,
-                    this.txUncompressed + uncompressed, this.rxUncompressed, this.txWithFrames, OffsetDateTime.now());
+            return new Entry(this.tx + compressed, this.rx, this.txUncompressed + uncompressed, this.rxUncompressed);
         }
 
         public Entry increaseRx(int compressed, int uncompressed) {
-            return new Entry(this.compressed, this.tx, this.rx + compressed,
-                    this.txUncompressed, this.rxUncompressed + uncompressed, this.txWithFrames, OffsetDateTime.now());
+            return new Entry(this.tx, this.rx + compressed, this.txUncompressed, this.rxUncompressed + uncompressed);
         }
     }
 
