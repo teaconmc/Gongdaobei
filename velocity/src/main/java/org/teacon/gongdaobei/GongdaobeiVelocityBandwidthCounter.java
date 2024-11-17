@@ -163,10 +163,7 @@ public final class GongdaobeiVelocityBandwidthCounter implements Closeable {
         var msgId = this.readVarInt(msg, 32).orElse(-1);
         if (channel.compress(msgId)) {
             var msgCompressBound = this.readVarInt(msg, 31).orElse(-1);
-            entry = entry.markCompressed(msgCompressBound >= 0);
-            if (channel.tx()) {
-                entry = entry.markTxWithFrames();
-            }
+            entry = entry.markCompressed(msgCompressBound >= 0).markTxWithFrames();
         }
         var msgPrefixedSize = this.prefixedSizeVarInt(msgSize);
         if (channel.tx()) {
@@ -495,7 +492,7 @@ public final class GongdaobeiVelocityBandwidthCounter implements Closeable {
         }
 
         public boolean compress(int id) {
-            return (this == PLAYER_INCOMING || this == SERVER_INCOMING) && id == 0x03;
+            return (this == PLAYER_OUTGOING || this == SERVER_OUTGOING) && id == 0x03;
         }
 
         public CodecException wrap(RuntimeException e) {
