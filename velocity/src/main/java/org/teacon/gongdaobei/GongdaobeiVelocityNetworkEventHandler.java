@@ -72,12 +72,9 @@ public final class GongdaobeiVelocityNetworkEventHandler implements Runnable, Cl
     private final Runnable prometheusCloseCallback;
     private final Set<HostAndPort> externalAddressWhitelist;
     private final AtomicReference<GongdaobeiRegistry> registry;
-    private final GongdaobeiVelocityBandwidthCounter collector;
     private final ConcurrentMap<HostAndPort, String> cachedServerNameMap = new ConcurrentHashMap<>();
 
-    public GongdaobeiVelocityNetworkEventHandler(GongdaobeiVelocity plugin,
-                                                 GongdaobeiTomlConfig.Velocity config,
-                                                 GongdaobeiVelocityBandwidthCounter collector) {
+    public GongdaobeiVelocityNetworkEventHandler(GongdaobeiVelocity plugin, GongdaobeiTomlConfig.Velocity config) {
         // velocity things
         this.logger = plugin.logger;
         this.server = plugin.server;
@@ -104,7 +101,6 @@ public final class GongdaobeiVelocityNetworkEventHandler implements Runnable, Cl
         this.server.getEventManager().register(plugin, this);
 
         // registry things
-        this.collector = collector;
         this.randomGenerator = new Random();
         this.externalAddressWhitelist = config.externalAddresses().stream()
                 .map(GongdaobeiTomlConfig.AddressPattern::getValue).collect(Collectors.toSet());
@@ -163,10 +159,6 @@ public final class GongdaobeiVelocityNetworkEventHandler implements Runnable, Cl
         var retiredServices = Sets.intersection(offlineServices, registry.getInternalAddrRetired());
         var missingServices = Sets.difference(offlineServices, registry.getInternalAddrRetired());
 
-        // collect bandwidth things
-        var serverBandwidthEntryOptional = this.collector.collectServer();
-        var backendBandwidthEntries = this.collector.collectBackend();
-
         // add logs for changes
         if (!missingServices.isEmpty()) {
             this.logger.warning("Registered service status changed at update " + index + " (retired: " +
@@ -182,13 +174,6 @@ public final class GongdaobeiVelocityNetworkEventHandler implements Runnable, Cl
         onlinePlayers.set(onlineSum);
         maximumPlayers.set(maximumSum);
         serviceInstances.set(onlineServices.size());
-        if (serverBandwidthEntryOptional.isPresent()) {
-            var sbe = serverBandwidthEntryOptional.get();
-            totalPlayerNetworkBytes.labels("outgoing").inc(sbe.tx());
-            totalPlayerUncompressedNetworkBytes.labels("outgoing").inc(sbe.txUncompressed());
-            totalPlayerNetworkBytes.labels("incoming").inc(sbe.rx());
-            totalPlayerUncompressedNetworkBytes.labels("incoming").inc(sbe.rxUncompressed());
-        }
 
         // push prom metrics of all the servers
         for (var internalAddr : onlineServices) {
@@ -196,23 +181,11 @@ public final class GongdaobeiVelocityNetworkEventHandler implements Runnable, Cl
             var params = registry.getParams(internalAddr);
             var serverName = this.cachedServerNameMap.get(internalAddr);
             servicePerTick.labels(serverName).set(params.tickMillis / 1000.0);
-            if (backendBandwidthEntries.containsKey(internalAddr)) {
-                var bbe = backendBandwidthEntries.get(internalAddr);
-                // tx: incoming for servers, rx: outgoing for servers
-                totalServiceNetworkBytes.labels("outgoing", serverName).inc(bbe.rx());
-                totalServiceUncompressedNetworkBytes.labels("outgoing", serverName).inc(bbe.rxUncompressed());
-                totalServiceNetworkBytes.labels("incoming", serverName).inc(bbe.tx());
-                totalServiceUncompressedNetworkBytes.labels("incoming", serverName).inc(bbe.txUncompressed());
-            }
         }
         // noinspection DuplicatedCode
         for (var internalAddr : offlineServices) {
             var serverName = this.cachedServerNameMap.get(internalAddr);
             servicePerTick.remove(serverName);
-            totalServiceNetworkBytes.remove("outgoing", serverName);
-            totalServiceUncompressedNetworkBytes.remove("outgoing", serverName);
-            totalServiceNetworkBytes.remove("incoming", serverName);
-            totalServiceUncompressedNetworkBytes.remove("incoming", serverName);
         }
 
         // push prom metrics of fallback servers
@@ -227,24 +200,12 @@ public final class GongdaobeiVelocityNetworkEventHandler implements Runnable, Cl
             var params = registry.getParams(internalAddr);
             var serverName = this.cachedServerNameMap.get(internalAddr);
             fallbackServicePerTick.labels(serverName).set(params.tickMillis / 1000.0);
-            if (backendBandwidthEntries.containsKey(internalAddr)) {
-                var bbe = backendBandwidthEntries.get(internalAddr);
-                // tx: incoming for servers, rx: outgoing for servers
-                totalFallbackServiceNetworkBytes.labels("outgoing", serverName).inc(bbe.rx());
-                totalFallbackServiceUncompressedNetworkBytes.labels("outgoing", serverName).inc(bbe.rxUncompressed());
-                totalFallbackServiceNetworkBytes.labels("incoming", serverName).inc(bbe.tx());
-                totalFallbackServiceUncompressedNetworkBytes.labels("incoming", serverName).inc(bbe.txUncompressed());
-            }
         }
         var offlineFallbacks = Sets.difference(oldFallback.getRight(), fallback.getRight());
         // noinspection DuplicatedCode
         for (var internalAddr : offlineFallbacks) {
             var serverName = this.cachedServerNameMap.get(internalAddr);
             fallbackServicePerTick.remove(serverName);
-            totalFallbackServiceNetworkBytes.remove("outgoing", serverName);
-            totalFallbackServiceUncompressedNetworkBytes.remove("outgoing", serverName);
-            totalFallbackServiceNetworkBytes.remove("incoming", serverName);
-            totalFallbackServiceUncompressedNetworkBytes.remove("incoming", serverName);
         }
 
         // push prom metrics of targeted servers
@@ -261,14 +222,6 @@ public final class GongdaobeiVelocityNetworkEventHandler implements Runnable, Cl
                 var params = registry.getParams(internalAddr);
                 var serverName = this.cachedServerNameMap.get(internalAddr);
                 targetedServicePerTick.labels(externalAddr.toString(), serverName).set(params.tickMillis / 1000.0);
-                if (backendBandwidthEntries.containsKey(internalAddr)) {
-                    var bbe = backendBandwidthEntries.get(internalAddr);
-                    // tx: incoming for servers, rx: outgoing for servers
-                    totalTargetedServiceNetworkBytes.labels("outgoing", externalAddr.toString(), serverName).inc(bbe.rx());
-                    totalTargetedServiceUncompressedNetworkBytes.labels("outgoing", externalAddr.toString(), serverName).inc(bbe.rxUncompressed());
-                    totalTargetedServiceNetworkBytes.labels("incoming", externalAddr.toString(), serverName).inc(bbe.tx());
-                    totalTargetedServiceUncompressedNetworkBytes.labels("incoming", externalAddr.toString(), serverName).inc(bbe.txUncompressed());
-                }
             }
             var prev = oldTargeted.get(externalAddr);
             var offline = prev != null ? Sets.difference(prev.getRight(), current.getRight()) : Set.<HostAndPort>of();
@@ -276,10 +229,6 @@ public final class GongdaobeiVelocityNetworkEventHandler implements Runnable, Cl
             for (var internalAddr : offline) {
                 var serverName = this.cachedServerNameMap.get(internalAddr);
                 targetedServicePerTick.remove(externalAddr.toString(), serverName);
-                totalTargetedServiceNetworkBytes.remove("outgoing", externalAddr.toString(), serverName);
-                totalTargetedServiceUncompressedNetworkBytes.remove("outgoing", externalAddr.toString(), serverName);
-                totalTargetedServiceNetworkBytes.remove("incoming", externalAddr.toString(), serverName);
-                totalTargetedServiceUncompressedNetworkBytes.remove("incoming", externalAddr.toString(), serverName);
             }
         }
         for (var externalAddr : Sets.difference(oldTargeted.keySet(), targeted.keySet())) {
@@ -293,10 +242,6 @@ public final class GongdaobeiVelocityNetworkEventHandler implements Runnable, Cl
             for (var addr : offline) {
                 var serverName = this.cachedServerNameMap.get(addr);
                 targetedServicePerTick.remove(externalAddr.toString(), serverName);
-                totalTargetedServiceNetworkBytes.remove("outgoing", externalAddr.toString(), serverName);
-                totalTargetedServiceUncompressedNetworkBytes.remove("outgoing", externalAddr.toString(), serverName);
-                totalTargetedServiceNetworkBytes.remove("incoming", externalAddr.toString(), serverName);
-                totalTargetedServiceUncompressedNetworkBytes.remove("incoming", externalAddr.toString(), serverName);
             }
         }
     }

@@ -37,7 +37,6 @@ import java.util.logging.Logger;
         description = GongdaobeiVelocityParameters.DESCRIPTION)
 public final class GongdaobeiVelocity {
     private GongdaobeiTomlConfig.Velocity config;
-    private GongdaobeiVelocityBandwidthCounter collector;
     private GongdaobeiVelocityNetworkEventHandler handler;
 
     public final Path dataDir;
@@ -61,8 +60,7 @@ public final class GongdaobeiVelocity {
             var redisUri = this.config.discoveryRedisUri();
             var desensitizeRedisUri = GongdaobeiUtil.desensitizeRedisUri(redisUri.getValue());
             this.logger.info("- Discovery Redis URI: " + desensitizeRedisUri + " (resolved from " + redisUri + ")");
-            this.collector = new GongdaobeiVelocityBandwidthCounter(this, this.config.prometheusServerPort() > 0);
-            this.handler = new GongdaobeiVelocityNetworkEventHandler(this, this.config, this.collector);
+            this.handler = new GongdaobeiVelocityNetworkEventHandler(this, this.config);
         } catch (IOException e) {
             throw new IllegalArgumentException(e);
         }
@@ -75,7 +73,6 @@ public final class GongdaobeiVelocity {
             this.logger.info("Saving to the configuration file ...");
             var file = dataDir.resolve("gongdaobei.toml");
             this.config.save(file);
-            this.collector.close();
             this.handler.close();
         } catch (IOException e) {
             throw new IllegalArgumentException(e);

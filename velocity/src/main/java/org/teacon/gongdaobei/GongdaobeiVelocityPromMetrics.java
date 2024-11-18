@@ -24,14 +24,6 @@ public final class GongdaobeiVelocityPromMetrics {
     public static final Counter totalPings;
     public static final Counter totalLogins;
     public static final Counter totalLoginsWithAffinity;
-    public static final Counter totalPlayerNetworkBytes;
-    public static final Counter totalServiceNetworkBytes;
-    public static final Counter totalFallbackServiceNetworkBytes;
-    public static final Counter totalTargetedServiceNetworkBytes;
-    public static final Counter totalPlayerUncompressedNetworkBytes;
-    public static final Counter totalServiceUncompressedNetworkBytes;
-    public static final Counter totalFallbackServiceUncompressedNetworkBytes;
-    public static final Counter totalTargetedServiceUncompressedNetworkBytes;
     public static final Gauge onlinePlayers;
     public static final Gauge fallbackOnlinePlayers;
     public static final Gauge targetedOnlinePlayers;
@@ -57,38 +49,6 @@ public final class GongdaobeiVelocityPromMetrics {
         totalLoginsWithAffinity = Counter.build(
                 "gongdaobei_logins_with_affinity_total",
                 "Total login requests by clients with affinity").register();
-        totalPlayerNetworkBytes = Counter.build(
-                "gongdaobei_player_network_bytes_total",
-                "Total network bytes received from or transmitted to " +
-                        "players (including proxy pings)").labelNames("channel").register();
-        totalServiceNetworkBytes = Counter.build(
-                "gongdaobei_service_network_bytes_total",
-                "Total network bytes received from or transmitted to " +
-                        "services").labelNames("channel", "name").register();
-        totalFallbackServiceNetworkBytes = Counter.build(
-                "gongdaobei_fallback_service_network_bytes_total",
-                "Total network bytes received from or transmitted to " +
-                        "fallback servers").labelNames("channel", "name").register();
-        totalTargetedServiceNetworkBytes = Counter.build(
-                "gongdaobei_targeted_service_network_bytes_total",
-                "Total network bytes received from or transmitted to " +
-                        "servers grouped by external addresses").labelNames("channel", "address", "name").register();
-        totalPlayerUncompressedNetworkBytes = Counter.build(
-                "gongdaobei_player_uncompressed_network_bytes_total",
-                "Total network bytes after decompression received from or transmitted to " +
-                        "players (including proxy pings)").labelNames("channel").register();
-        totalServiceUncompressedNetworkBytes = Counter.build(
-                "gongdaobei_service_uncompressed_network_bytes_total",
-                "Total network bytes after decompression received from or transmitted to " +
-                        "services").labelNames("channel", "name").register();
-        totalFallbackServiceUncompressedNetworkBytes = Counter.build(
-                "gongdaobei_fallback_service_uncompressed_network_bytes_total",
-                "Total network bytes after decompression received from or transmitted to " +
-                        "fallback servers").labelNames("channel", "name").register();
-        totalTargetedServiceUncompressedNetworkBytes = Counter.build(
-                "gongdaobei_targeted_service_uncompressed_network_bytes_total",
-                "Total network bytes after decompression received from or transmitted to " +
-                        "servers grouped by external addresses").labelNames("channel", "address", "name").register();
         onlinePlayers = Gauge.build(
                 "gongdaobei_online_players",
                 "Online players of all the servers").register();
