@@ -39,6 +39,7 @@ import io.prometheus.client.exporter.HTTPServer;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer;
 import org.apache.commons.lang3.tuple.Pair;
+import reactor.core.publisher.Mono;
 
 import java.io.Closeable;
 import java.io.IOException;
@@ -119,6 +120,13 @@ public final class GongdaobeiVelocityNetworkEventHandler implements Runnable, Cl
         }
         this.prometheusCloseCallback = prometheusCloseCallback;
         this.registry = new AtomicReference<>(new GongdaobeiRegistry.Builder(this::getOrCreateServerName).build());
+
+        // command things
+        this.server.getCommandManager().register(
+                this.server.getCommandManager().metaBuilder("gongdaobei").aliases("go").build(),
+                new GongdaobeiVelocityCommand(this.server, this.registry, Mono.fromFuture(this.conn, true),
+                        current -> this.server.getServer(this.cachedServerNameMap.get(current.internalAddress()))));
+
     }
 
     @Override

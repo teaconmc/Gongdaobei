@@ -18,11 +18,16 @@
 package org.teacon.gongdaobei;
 
 import com.google.common.net.HostAndPort;
-import io.lettuce.core.*;
+import io.lettuce.core.RedisURI;
+import io.lettuce.core.ScanArgs;
+import io.lettuce.core.ScanIterator;
+import io.lettuce.core.SetArgs;
+import io.lettuce.core.api.reactive.RedisReactiveCommands;
 import io.lettuce.core.api.sync.RedisCommands;
 import io.lettuce.core.cluster.ClusterClientOptions;
 import io.lettuce.core.cluster.ClusterTopologyRefreshOptions;
 import org.apache.commons.lang3.tuple.Pair;
+import reactor.core.publisher.Mono;
 
 import java.io.IOException;
 import java.time.Duration;
@@ -89,6 +94,12 @@ public final class GongdaobeiUtil {
                 return;
             }
         }
+    }
+
+    public static Mono<GongdaobeiConfirmation> fetchConfirmation(UUID player,
+                                                                 RedisReactiveCommands<String, String> cmd) {
+        var result = cmd.get("gongdaobei:confirmation{" + player + "}");
+        return result.flatMap(input -> Mono.fromCallable(() -> GongdaobeiConfirmation.parse(input)));
     }
 
     public static void confirmPlayer(UUID player,
@@ -167,6 +178,12 @@ public final class GongdaobeiUtil {
         var data = GZIP_DATA_PREFIX + Base64.getEncoder().encodeToString(dataBytes);
         checkArgument(data.startsWith(GZIP_DATA_PREFIX + GZIP_BASE64_HEADER));
         cmd.hset(dataKey, targets.stream().collect(Collectors.toMap(GongdaobeiConfirmation::toPlayerKey, k -> data)));
+    }
+
+    public static boolean checkNoOwner(UUID player, RedisCommands<String, String> cmd) {
+        var lockKey = "gongdaobei:player:lock{" + player + "}";
+        var lock = Optional.ofNullable(cmd.get(lockKey)).flatMap(GongdaobeiConfirmation::tryParse);
+        return lock.isEmpty();
     }
 
     public static void checkOwned(UUID player,
