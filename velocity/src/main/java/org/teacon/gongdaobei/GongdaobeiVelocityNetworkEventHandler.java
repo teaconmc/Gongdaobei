@@ -86,13 +86,14 @@ public final class GongdaobeiVelocityNetworkEventHandler implements Runnable, Cl
         // redis things
         this.redisClient = RedisClient.create();
         this.redisClient.setOptions(GongdaobeiUtil.getRedisClientOptions());
+        var redisPoolConfig = BoundedPoolConfig.builder().maxTotal(-1).build();
         this.redisPool = AsyncConnectionPoolSupport.createBoundedObjectPoolAsync(
                 () -> MasterReplica.connectAsync(this.redisClient, StringCodec.UTF8,
-                        config.discoveryRedisUri().getValue()), BoundedPoolConfig.create()).whenComplete((c, e) -> {
+                        config.discoveryRedisUri().getValue()), redisPoolConfig).whenComplete((c, e) -> {
             var uri = GongdaobeiUtil.desensitizeRedisUri(config.discoveryRedisUri().getValue());
             if (c != null) {
                 this.logger.info("Connected to the discovery redis server " +
-                        "(" + uri + ", with " + c.getObjectCount() + " / " + c.getMaxTotal() + " pooled connections)");
+                        "(" + uri + ", with " + c.getObjectCount() + " / " + c.getMaxIdle() + " pooled connections)");
             }
             if (e != null) {
                 this.logger.log(Level.SEVERE, "Failed to connect to the discovery redis server (" +
@@ -141,18 +142,19 @@ public final class GongdaobeiVelocityNetworkEventHandler implements Runnable, Cl
         var index = this.scheduleCounter.getAndIncrement();
 
         // update registry
-        var conn = (StatefulRedisMasterReplicaConnection<String, String>) null;
         var registryBuilder = new GongdaobeiRegistry.Builder(this::getOrCreateServerName);
+        var pool = (BoundedAsyncPool<StatefulRedisMasterReplicaConnection<String, String>>) null;
+        var conn = (StatefulRedisMasterReplicaConnection<String, String>) null;
         try {
             // noinspection resource
-            conn = this.redisPool.toCompletableFuture().join().acquire().join();
+            pool = this.redisPool.toCompletableFuture().join();
+            conn = pool.acquire().join();
             GongdaobeiUtil.buildRegistry(registryBuilder, this.externalAddressWhitelist, conn.sync());
         } catch (CancellationException | CompletionException e) {
             this.logger.fine("The redis server is offline, no service data will be retrieved: " + e.getMessage());
         } finally {
             if (conn != null) {
-                // noinspection resource
-                this.redisPool.toCompletableFuture().join().release(conn).join();
+                pool.release(conn).join();
             }
         }
         var registry = registryBuilder.build();
@@ -264,6 +266,14 @@ public final class GongdaobeiVelocityNetworkEventHandler implements Runnable, Cl
             for (var addr : offline) {
                 var serverName = this.cachedServerNameMap.get(addr);
                 targetedServicePerTick.remove(externalAddr.toString(), serverName);
+            }
+        }
+
+        // warn if the pool has too many connections
+        if (pool != null) {
+            var count = pool.getObjectCount();
+            if (count >= pool.getMaxIdle() * 2) {
+                this.logger.warning("Too many connections (" + count + ") in the redis pool");
             }
         }
     }

@@ -146,13 +146,14 @@ public final class GongdaobeiNeoForge {
             }
             this.redisClient = Util.make(
                     RedisClient.create(), c -> c.setOptions(GongdaobeiUtil.getRedisClientOptions()));
+            var redisPoolConfig = BoundedPoolConfig.builder().maxTotal(-1).build();
             this.redisPool = AsyncConnectionPoolSupport.createBoundedObjectPoolAsync(
                     () -> MasterReplica.connectAsync(this.redisClient, StringCodec.UTF8,
-                            config.discoveryRedisUri().getValue()), BoundedPoolConfig.create()).whenComplete((c, e) -> {
+                            config.discoveryRedisUri().getValue()), redisPoolConfig).whenComplete((c, e) -> {
                 var uri = GongdaobeiUtil.desensitizeRedisUri(config.discoveryRedisUri().getValue());
                 if (c != null) {
                     LOGGER.info("Connected to the discovery redis server " +
-                            "({}, with {} / {} pooled connections)", uri, c.getObjectCount(), c.getMaxTotal());
+                            "({}, with {} / {} pooled connections)", uri, c.getIdle(), c.getMaxIdle());
                 }
                 if (e != null) {
                     LOGGER.error("Failed to connect to the discovery redis server ({}), " +
@@ -366,6 +367,20 @@ public final class GongdaobeiNeoForge {
                 }
             }
             this.tickSubmitService(count);
+            this.tickCheckRedisConnectionCount(count);
+        }
+
+        private void tickCheckRedisConnectionCount(int tickCount) {
+            if ((tickCount - 1) % 125 == 124) {
+                // warn if the pool has too many connections
+                var pool = this.redisPool.toCompletableFuture().getNow(null);
+                if (pool != null) {
+                    var count = pool.getObjectCount();
+                    if (count >= pool.getMaxIdle() * 2) {
+                        LOGGER.warn("Too many connections ({}) in the redis pool", count);
+                    }
+                }
+            }
         }
 
         public void tickSubmitService(int tickCount) {
