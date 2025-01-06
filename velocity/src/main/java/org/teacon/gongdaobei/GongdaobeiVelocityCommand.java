@@ -8,8 +8,9 @@ import com.velocitypowered.api.command.SimpleCommand;
 import com.velocitypowered.api.proxy.Player;
 import com.velocitypowered.api.proxy.ProxyServer;
 import com.velocitypowered.api.proxy.server.RegisteredServer;
-import io.lettuce.core.api.StatefulRedisConnection;
 import io.lettuce.core.api.sync.RedisCommands;
+import io.lettuce.core.masterreplica.StatefulRedisMasterReplicaConnection;
+import io.lettuce.core.support.BoundedAsyncPool;
 import org.apache.commons.lang3.tuple.Pair;
 import reactor.core.publisher.Mono;
 
@@ -43,14 +44,14 @@ public final class GongdaobeiVelocityCommand implements SimpleCommand {
 
     private final ProxyServer proxyServer;
     private final AtomicReference<GongdaobeiRegistry> registry;
-    private final Mono<StatefulRedisConnection<String, String>> conn;
+    private final Mono<BoundedAsyncPool<StatefulRedisMasterReplicaConnection<String, String>>> redisPool;
     private final Function<GongdaobeiConfirmation, Optional<RegisteredServer>> toRegisteredServer;
 
     public GongdaobeiVelocityCommand(ProxyServer server,
                                      AtomicReference<GongdaobeiRegistry> registry,
-                                     Mono<StatefulRedisConnection<String, String>> conn,
+                                     Mono<BoundedAsyncPool<StatefulRedisMasterReplicaConnection<String, String>>> redisPool,
                                      Function<GongdaobeiConfirmation, Optional<RegisteredServer>> toServer) {
-        this.conn = conn;
+        this.redisPool = redisPool;
         this.registry = registry;
         this.proxyServer = server;
         this.toRegisteredServer = toServer;
@@ -88,7 +89,8 @@ public final class GongdaobeiVelocityCommand implements SimpleCommand {
             var collected = new LinkedHashMap<GongdaobeiConfirmation, GongdaobeiServiceParams>();
             GongdaobeiConfirmation.collect(playerAddr, this.registry.get(), collected::put);
             // get player current confirmation
-            var confirmation = this.conn.flatMap(c -> GongdaobeiUtil.fetchConfirmation(sourceUniqueId, c.reactive()));
+            var conn = this.redisPool.flatMap(p -> Mono.fromFuture(p.acquire(), true)).cache();
+            var confirmation = conn.flatMap(c -> GongdaobeiUtil.fetchConfirmation(sourceUniqueId, c.reactive()));
             var next = switch (arguments.length) {
                 // no argument: transfer to another server
                 case 0 -> confirmation.mapNotNull(c -> {
@@ -115,7 +117,7 @@ public final class GongdaobeiVelocityCommand implements SimpleCommand {
                     } catch (IllegalArgumentException e) {
                         targetUniqueId = this.proxyServer.getPlayer(arguments[0]).map(Player::getUniqueId);
                     }
-                    var target = targetUniqueId.map(t -> this.conn.flatMap(
+                    var target = targetUniqueId.map(t -> conn.flatMap(
                             c -> GongdaobeiUtil.fetchConfirmation(t, c.reactive()))).orElse(Mono.empty());
                     yield confirmation.flatMap(c -> target.mapNotNull(t -> {
                         var coll = Sets.newTreeSet(Comparator.comparing(GongdaobeiConfirmation::toString));
@@ -136,7 +138,7 @@ public final class GongdaobeiVelocityCommand implements SimpleCommand {
                     player.sendRichMessage(msg);
                 });
             };
-            Mono.zip(next, this.conn, Pair::of).subscribe(pair -> {
+            var last = Mono.zip(next, conn, Pair::of).onErrorComplete().doOnSuccess(pair -> {
                 var target = pair.getKey();
                 var server = this.toRegisteredServer.apply(target);
                 if (server.isPresent()) {
@@ -149,6 +151,8 @@ public final class GongdaobeiVelocityCommand implements SimpleCommand {
                     player.sendRichMessage(msg);
                 }
             });
+            var release = last.then(this.redisPool.flatMap(p -> conn.map(c -> Mono.fromFuture(p.release(c), true))));
+            release.subscribe();
         }
     }
 

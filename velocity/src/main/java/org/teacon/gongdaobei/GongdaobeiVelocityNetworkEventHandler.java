@@ -32,9 +32,12 @@ import com.velocitypowered.api.proxy.ProxyServer;
 import com.velocitypowered.api.proxy.server.ServerInfo;
 import com.velocitypowered.api.scheduler.ScheduledTask;
 import io.lettuce.core.RedisClient;
-import io.lettuce.core.api.StatefulRedisConnection;
 import io.lettuce.core.codec.StringCodec;
 import io.lettuce.core.masterreplica.MasterReplica;
+import io.lettuce.core.masterreplica.StatefulRedisMasterReplicaConnection;
+import io.lettuce.core.support.AsyncConnectionPoolSupport;
+import io.lettuce.core.support.BoundedAsyncPool;
+import io.lettuce.core.support.BoundedPoolConfig;
 import io.prometheus.client.exporter.HTTPServer;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer;
@@ -63,7 +66,7 @@ public final class GongdaobeiVelocityNetworkEventHandler implements Runnable, Cl
     private final ProxyServer server;
 
     private final RedisClient redisClient;
-    private final CompletableFuture<? extends StatefulRedisConnection<String, String>> conn;
+    private final CompletionStage<BoundedAsyncPool<StatefulRedisMasterReplicaConnection<String, String>>> redisPool;
 
     private final ScheduledTask scheduledTask;
     private final Runnable unregisterCallback;
@@ -83,11 +86,13 @@ public final class GongdaobeiVelocityNetworkEventHandler implements Runnable, Cl
         // redis things
         this.redisClient = RedisClient.create();
         this.redisClient.setOptions(GongdaobeiUtil.getRedisClientOptions());
-        this.conn = MasterReplica.connectAsync(
-                this.redisClient, StringCodec.UTF8, config.discoveryRedisUri().getValue()).whenComplete((c, e) -> {
+        this.redisPool = AsyncConnectionPoolSupport.createBoundedObjectPoolAsync(
+                () -> MasterReplica.connectAsync(this.redisClient, StringCodec.UTF8,
+                        config.discoveryRedisUri().getValue()), BoundedPoolConfig.create()).whenComplete((c, e) -> {
             var uri = GongdaobeiUtil.desensitizeRedisUri(config.discoveryRedisUri().getValue());
             if (c != null) {
-                this.logger.info("Connected to the discovery redis server (" + uri + ")");
+                this.logger.info("Connected to the discovery redis server " +
+                        "(" + uri + ", with " + c.getObjectCount() + " / " + c.getMaxTotal() + " pooled connections)");
             }
             if (e != null) {
                 this.logger.log(Level.SEVERE, "Failed to connect to the discovery redis server (" +
@@ -124,7 +129,8 @@ public final class GongdaobeiVelocityNetworkEventHandler implements Runnable, Cl
         // command things
         this.server.getCommandManager().register(
                 this.server.getCommandManager().metaBuilder("gongdaobei").aliases("go").build(),
-                new GongdaobeiVelocityCommand(this.server, this.registry, Mono.fromFuture(this.conn, true),
+                new GongdaobeiVelocityCommand(this.server, this.registry,
+                        Mono.fromFuture(this.redisPool.toCompletableFuture(), true),
                         current -> this.server.getServer(this.cachedServerNameMap.get(current.internalAddress()))));
 
     }
@@ -135,11 +141,19 @@ public final class GongdaobeiVelocityNetworkEventHandler implements Runnable, Cl
         var index = this.scheduleCounter.getAndIncrement();
 
         // update registry
+        var conn = (StatefulRedisMasterReplicaConnection<String, String>) null;
         var registryBuilder = new GongdaobeiRegistry.Builder(this::getOrCreateServerName);
         try {
-            GongdaobeiUtil.buildRegistry(registryBuilder, this.externalAddressWhitelist, this.conn.get().sync());
-        } catch (ExecutionException | InterruptedException e) {
+            // noinspection resource
+            conn = this.redisPool.toCompletableFuture().join().acquire().join();
+            GongdaobeiUtil.buildRegistry(registryBuilder, this.externalAddressWhitelist, conn.sync());
+        } catch (CancellationException | CompletionException e) {
             this.logger.fine("The redis server is offline, no service data will be retrieved: " + e.getMessage());
+        } finally {
+            if (conn != null) {
+                // noinspection resource
+                this.redisPool.toCompletableFuture().join().release(conn).join();
+            }
         }
         var registry = registryBuilder.build();
         var oldRegistry = this.registry.getAndSet(registry);
@@ -256,11 +270,18 @@ public final class GongdaobeiVelocityNetworkEventHandler implements Runnable, Cl
 
     @Subscribe
     public void on(DisconnectEvent event) {
+        var conn = (StatefulRedisMasterReplicaConnection<String, String>) null;
         try {
-            var cmd = this.conn.get().sync();
-            GongdaobeiUtil.refreshAffinity(event.getPlayer().getUniqueId(), this::getConfirmationAffinity, cmd);
-        } catch (ExecutionException | InterruptedException e) {
+            // noinspection resource
+            conn = this.redisPool.toCompletableFuture().join().acquire().join();
+            GongdaobeiUtil.refreshAffinity(event.getPlayer().getUniqueId(), this::getConfirmationAffinity, conn.sync());
+        } catch (CancellationException | CompletionException e) {
             this.logger.fine("The redis server is offline, no service data will be retrieved: " + e.getMessage());
+        } finally {
+            if (conn != null) {
+                // noinspection resource
+                this.redisPool.toCompletableFuture().join().release(conn).join();
+            }
         }
     }
 
@@ -273,9 +294,11 @@ public final class GongdaobeiVelocityNetworkEventHandler implements Runnable, Cl
         // if there is an affinity host which has space, send the player to that server
         var playerName = player.getUsername();
         var playerUniqueId = player.getUniqueId();
+        var conn = (StatefulRedisMasterReplicaConnection<String, String>) null;
         try {
-            var cmd = this.conn.get().sync();
-            var affinity = GongdaobeiUtil.fetchAffinity(playerUniqueId, cmd);
+            // noinspection resource
+            conn = this.redisPool.toCompletableFuture().join().acquire().join();
+            var affinity = GongdaobeiUtil.fetchAffinity(playerUniqueId, conn.sync());
             var affinityParams = affinity.map(playerChoices::get);
             if (affinityParams.isPresent()) {
                 var online = affinityParams.get().onlinePlayers;
@@ -283,7 +306,7 @@ public final class GongdaobeiVelocityNetworkEventHandler implements Runnable, Cl
                 if (online < maximum) {
                     this.logger.info("Affinity server found, send " + playerName + " (" + playerUniqueId
                             + ") to the affinity server (" + affinity.get() + ", choices: " + playerChoices + ")");
-                    GongdaobeiUtil.confirmPlayer(playerUniqueId, affinity.get(), cmd);
+                    GongdaobeiUtil.confirmPlayer(playerUniqueId, affinity.get(), conn.sync());
                     var serverName = this.cachedServerNameMap.get(affinity.get().internalAddress());
                     event.setInitialServer(this.server.getServer(serverName).orElse(null));
                     totalLoginsWithAffinity.inc();
@@ -309,17 +332,22 @@ public final class GongdaobeiVelocityNetworkEventHandler implements Runnable, Cl
                     var balanced = next.getKey();
                     this.logger.info("Load balancing performed, send " + playerName + " (" + playerUniqueId +
                             ") to the chosen balanced server (" + balanced + ", choices: " + playerChoices + ")");
-                    GongdaobeiUtil.confirmPlayer(playerUniqueId, balanced, cmd);
+                    GongdaobeiUtil.confirmPlayer(playerUniqueId, balanced, conn.sync());
                     var serverName = this.cachedServerNameMap.get(balanced.internalAddress());
                     event.setInitialServer(this.server.getServer(serverName).orElse(null));
                     totalLogins.inc();
                     return;
                 }
             }
-        } catch (ExecutionException | InterruptedException e) {
+        } catch (CancellationException | CompletionException e) {
             this.logger.fine("The redis server is offline, no service data will be retrieved: " + e.getMessage());
             player.disconnect(Component.translatable("velocity.error.no-available-servers"));
             return;
+        } finally {
+            if (conn != null) {
+                // noinspection resource
+                this.redisPool.toCompletableFuture().join().release(conn).join();
+            }
         }
         // if there is no choice (such that all the choices are full), disconnect
         player.disconnect(Component.translatable("velocity.error.no-available-servers"));
@@ -357,7 +385,8 @@ public final class GongdaobeiVelocityNetworkEventHandler implements Runnable, Cl
         this.prometheusCloseCallback.run();
         this.unregisterCallback.run();
         this.scheduledTask.cancel();
-        this.redisClient.close();
+        this.redisPool.thenCompose(BoundedAsyncPool::closeAsync).toCompletableFuture().join();
+        this.redisClient.shutdownAsync().join();
     }
 
     private JsonObject getDefaultPingForgeData() {

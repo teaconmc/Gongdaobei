@@ -23,9 +23,12 @@ import com.google.gson.JsonNull;
 import com.mojang.authlib.GameProfile;
 import com.mojang.logging.LogUtils;
 import io.lettuce.core.RedisClient;
-import io.lettuce.core.api.StatefulRedisConnection;
 import io.lettuce.core.codec.StringCodec;
 import io.lettuce.core.masterreplica.MasterReplica;
+import io.lettuce.core.masterreplica.StatefulRedisMasterReplicaConnection;
+import io.lettuce.core.support.AsyncConnectionPoolSupport;
+import io.lettuce.core.support.BoundedAsyncPool;
+import io.lettuce.core.support.BoundedPoolConfig;
 import net.minecraft.FieldsAreNonnullByDefault;
 import net.minecraft.MethodsReturnNonnullByDefault;
 import net.minecraft.Util;
@@ -57,8 +60,10 @@ import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.Map;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutionException;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.CompletionStage;
 
 import static net.minecraft.world.level.storage.LevelResource.PLAYER_ADVANCEMENTS_DIR;
 import static net.minecraft.world.level.storage.LevelResource.PLAYER_STATS_DIR;
@@ -127,7 +132,7 @@ public final class GongdaobeiNeoForge {
         private final String hostname;
         private final RedisClient redisClient;
         private final GongdaobeiTomlConfig.Service config;
-        private final CompletableFuture<? extends StatefulRedisConnection<String, String>> conn;
+        private final CompletionStage<BoundedAsyncPool<StatefulRedisMasterReplicaConnection<String, String>>> redisPool;
 
         private Map.Entry<HostAndPort, GongdaobeiServiceParams> serviceParamsEntry;
 
@@ -141,11 +146,13 @@ public final class GongdaobeiNeoForge {
             }
             this.redisClient = Util.make(
                     RedisClient.create(), c -> c.setOptions(GongdaobeiUtil.getRedisClientOptions()));
-            this.conn = MasterReplica.connectAsync(
-                    this.redisClient, StringCodec.UTF8, config.discoveryRedisUri().getValue()).whenComplete((c, e) -> {
+            this.redisPool = AsyncConnectionPoolSupport.createBoundedObjectPoolAsync(
+                    () -> MasterReplica.connectAsync(this.redisClient, StringCodec.UTF8,
+                            config.discoveryRedisUri().getValue()), BoundedPoolConfig.create()).whenComplete((c, e) -> {
                 var uri = GongdaobeiUtil.desensitizeRedisUri(config.discoveryRedisUri().getValue());
                 if (c != null) {
-                    LOGGER.info("Connected to the discovery redis server ({})", uri);
+                    LOGGER.info("Connected to the discovery redis server " +
+                            "({}, with {} / {} pooled connections)", uri, c.getObjectCount(), c.getMaxTotal());
                 }
                 if (e != null) {
                     LOGGER.error("Failed to connect to the discovery redis server ({}), " +
@@ -178,15 +185,23 @@ public final class GongdaobeiNeoForge {
             var id = gameProfile.getId();
             var params = this.serviceParamsEntry.getValue();
             var internalAddr = this.serviceParamsEntry.getKey();
+            var conn = (StatefulRedisMasterReplicaConnection<String, String>) null;
             try {
-                GongdaobeiUtil.checkOwned(id, true, internalAddr, params, this.conn.get().sync());
+                // noinspection resource
+                conn = this.redisPool.toCompletableFuture().join().acquire().join();
+                GongdaobeiUtil.checkOwned(id, true, internalAddr, params, conn.sync());
                 return super.canPlayerLogin(socketAddress, gameProfile);
             } catch (IOException e) {
                 LOGGER.info("The player has been refused to connect to the server: {}", e.getMessage(), e);
                 return DUPLICATE_LOGIN_DISCONNECT_MESSAGE;
-            } catch (ExecutionException | InterruptedException e) {
+            } catch (CancellationException | CompletionException e) {
                 LOGGER.debug("The redis server is offline, no player data will be synced", e);
                 return super.canPlayerLogin(socketAddress, gameProfile);
+            } finally {
+                if (conn != null) {
+                    // noinspection resource
+                    this.redisPool.toCompletableFuture().join().release(conn).join();
+                }
             }
         }
 
@@ -194,11 +209,13 @@ public final class GongdaobeiNeoForge {
         public void placeNewPlayer(Connection connection, ServerPlayer player, CommonListenerCookie cookie) {
             var id = player.getUUID();
             var entry = this.serviceParamsEntry;
+            var conn = (StatefulRedisMasterReplicaConnection<String, String>) null;
             try {
-                var cmd = this.conn.get().sync();
                 var currentServer = this.getServer();
                 var name = player.getGameProfile().getName();
-                var holder = GongdaobeiUtil.tryLock(id, entry.getKey(), entry.getValue(), cmd);
+                // noinspection resource
+                conn = this.redisPool.toCompletableFuture().join().acquire().join();
+                var holder = GongdaobeiUtil.tryLock(id, entry.getKey(), entry.getValue(), conn.sync());
                 var targets = new ArrayList<GongdaobeiConfirmation>(entry.getValue().externalAddresses.size() + 2);
                 var hitTargets = new LinkedHashSet<GongdaobeiConfirmation>();
                 if (entry.getValue().isFallback) {
@@ -208,7 +225,7 @@ public final class GongdaobeiNeoForge {
                     targets.add(new GongdaobeiConfirmation.Targeted(entry.getKey(), externalAddr));
                 }
                 targets.add(holder);
-                var playerPair = GongdaobeiUtil.loadPlayerData(id, targets, cmd);
+                var playerPair = GongdaobeiUtil.loadPlayerData(id, targets, conn.sync());
                 if (playerPair.isPresent()) {
                     hitTargets.add(playerPair.get().getKey());
                     // TODO: custom player data files
@@ -217,7 +234,7 @@ public final class GongdaobeiNeoForge {
                     var tmp = Files.write(Files.createTempFile(dataDir, id + "-", ".dat"), playerData);
                     Util.safeReplaceFile(dataDir.resolve(id + ".dat"), tmp, dataDir.resolve(id + ".dat_old"));
                 }
-                var statsPair = GongdaobeiUtil.loadStats(id, targets, cmd);
+                var statsPair = GongdaobeiUtil.loadStats(id, targets, conn.sync());
                 // noinspection DuplicatedCode
                 if (statsPair.isPresent()) {
                     hitTargets.add(statsPair.get().getKey());
@@ -226,7 +243,7 @@ public final class GongdaobeiNeoForge {
                     var tmp = Files.write(Files.createTempFile(statsDir, id + "-", ".json"), statsData);
                     Files.move(tmp, statsDir.resolve(id + ".json"), StandardCopyOption.REPLACE_EXISTING);
                 }
-                var advancementsPair = GongdaobeiUtil.loadAdvancements(id, targets, cmd);
+                var advancementsPair = GongdaobeiUtil.loadAdvancements(id, targets, conn.sync());
                 // noinspection DuplicatedCode
                 if (advancementsPair.isPresent()) {
                     hitTargets.add(advancementsPair.get().getKey());
@@ -244,8 +261,13 @@ public final class GongdaobeiNeoForge {
             } catch (IOException e) {
                 LOGGER.warn(e.getMessage(), e);
                 connection.disconnect(DUPLICATE_LOGIN_DISCONNECT_MESSAGE);
-            } catch (ExecutionException | InterruptedException e) {
+            } catch (CancellationException | CompletionException e) {
                 LOGGER.debug("The redis server is offline, no player data will be synced", e);
+            } finally {
+                if (conn != null) {
+                    // noinspection resource
+                    this.redisPool.toCompletableFuture().join().release(conn).join();
+                }
             }
         }
 
@@ -254,10 +276,12 @@ public final class GongdaobeiNeoForge {
             super.save(player);
             var id = player.getUUID();
             var entry = this.serviceParamsEntry;
+            var conn = (StatefulRedisMasterReplicaConnection<String, String>) null;
             try {
-                var cmd = this.conn.get().sync();
+                // noinspection resource
+                conn = this.redisPool.toCompletableFuture().join().acquire().join();
                 // TODO: custom player data files
-                GongdaobeiUtil.checkOwned(id, false, entry.getKey(), entry.getValue(), cmd);
+                GongdaobeiUtil.checkOwned(id, false, entry.getKey(), entry.getValue(), conn.sync());
                 var targets = new ArrayList<GongdaobeiConfirmation>(entry.getValue().externalAddresses.size() + 1);
                 if (entry.getValue().isFallback) {
                     targets.add(new GongdaobeiConfirmation.Fallback(entry.getKey()));
@@ -269,19 +293,24 @@ public final class GongdaobeiNeoForge {
                 var name = player.getGameProfile().getName();
                 var dataDir = this.playerIo.getPlayerDir().toPath();
                 var playerData = Files.readAllBytes(dataDir.resolve(id + ".dat"));
-                GongdaobeiUtil.savePlayerData(id, playerData, targets, cmd);
+                GongdaobeiUtil.savePlayerData(id, playerData, targets, conn.sync());
                 var statsDir = currentServer.getWorldPath(PLAYER_STATS_DIR);
                 var stats = Files.readAllBytes(statsDir.resolve(id + ".json"));
-                GongdaobeiUtil.saveStats(id, stats, targets, cmd);
+                GongdaobeiUtil.saveStats(id, stats, targets, conn.sync());
                 var advancementsDir = currentServer.getWorldPath(PLAYER_ADVANCEMENTS_DIR);
                 var advancements = Files.readAllBytes(advancementsDir.resolve(id + ".json"));
-                GongdaobeiUtil.saveAdvancements(id, advancements, targets, cmd);
+                GongdaobeiUtil.saveAdvancements(id, advancements, targets, conn.sync());
                 LOGGER.info("Synced player data / stats / advancements of {} ({}) to {}", name, id, targets);
             } catch (IOException e) {
                 LOGGER.warn(e.getMessage(), e);
                 player.connection.disconnect(DUPLICATE_LOGIN_DISCONNECT_MESSAGE);
-            } catch (ExecutionException | InterruptedException e) {
+            } catch (CancellationException | CompletionException e) {
                 LOGGER.debug("The redis server is offline, no player data will be synced", e);
+            } finally {
+                if (conn != null) {
+                    // noinspection resource
+                    this.redisPool.toCompletableFuture().join().release(conn).join();
+                }
             }
         }
 
@@ -290,14 +319,21 @@ public final class GongdaobeiNeoForge {
             super.remove(player);
             var id = player.getUUID();
             var entry = this.serviceParamsEntry;
+            var conn = (StatefulRedisMasterReplicaConnection<String, String>) null;
             try {
-                var cmd = this.conn.get().sync();
-                GongdaobeiUtil.tryRelease(id, entry.getKey(), entry.getValue(), cmd);
+                // noinspection resource
+                conn = this.redisPool.toCompletableFuture().join().acquire().join();
+                GongdaobeiUtil.tryRelease(id, entry.getKey(), entry.getValue(), conn.sync());
             } catch (IOException e) {
                 LOGGER.warn(e.getMessage(), e);
                 player.connection.disconnect(DUPLICATE_LOGIN_DISCONNECT_MESSAGE);
-            } catch (ExecutionException | InterruptedException e) {
+            } catch (CancellationException | CompletionException e) {
                 LOGGER.debug("The redis server is offline, no player data will be synced", e);
+            } finally {
+                if (conn != null) {
+                    // noinspection resource
+                    this.redisPool.toCompletableFuture().join().release(conn).join();
+                }
             }
         }
 
@@ -311,13 +347,20 @@ public final class GongdaobeiNeoForge {
                 if ((id.hashCode() + count - 1) % 250 == 0) {
                     // noinspection resource
                     Util.ioPool().submit(() -> {
+                        var conn = (StatefulRedisMasterReplicaConnection<String, String>) null;
                         try {
-                            var cmd = this.conn.get().sync();
-                            GongdaobeiUtil.tryRefreshLock(player.getUUID(), entry.getKey(), entry.getValue(), cmd);
+                            // noinspection resource
+                            conn = this.redisPool.toCompletableFuture().join().acquire().join();
+                            GongdaobeiUtil.tryRefreshLock(player.getUUID(), entry.getKey(), entry.getValue(), conn.sync());
                         } catch (IOException e) {
                             player.connection.disconnect(DUPLICATE_LOGIN_DISCONNECT_MESSAGE);
-                        } catch (ExecutionException | InterruptedException e) {
+                        } catch (CancellationException | CompletionException e) {
                             LOGGER.debug("The redis server is offline, no player data will be synced", e);
+                        } finally {
+                            if (conn != null) {
+                                // noinspection resource
+                                this.redisPool.toCompletableFuture().join().release(conn).join();
+                            }
                         }
                     });
                 }
@@ -326,29 +369,47 @@ public final class GongdaobeiNeoForge {
         }
 
         public void tickSubmitService(int tickCount) {
+            var conn = (StatefulRedisMasterReplicaConnection<String, String>) null;
             try {
                 if ((tickCount - 1) % 20 == 19) {
-                    var cmd = this.conn.get().sync();
+                    // noinspection resource
+                    conn = this.redisPool.toCompletableFuture().join().acquire().join();
                     var entry = this.serviceParamsEntry = this.refreshParamsEntry(tickCount, false);
+                    var cmd = conn.sync();
                     // noinspection resource
                     Util.ioPool().submit(() -> GongdaobeiUtil.submitService(entry.getKey(), entry.getValue(), cmd));
                 }
-            } catch (ExecutionException | InterruptedException e) {
+            } catch (CancellationException | CompletionException e) {
                 LOGGER.debug("The redis server is offline, no service data will be submitted", e);
+            } finally {
+                if (conn != null) {
+                    // noinspection resource
+                    this.redisPool.toCompletableFuture().join().release(conn).join();
+                }
             }
         }
 
         @Override
         public void close() {
+            var conn = (StatefulRedisMasterReplicaConnection<String, String>) null;
             try {
-                var cmd = this.conn.get().sync();
                 var count = this.getServer().getTickCount();
+                // noinspection resource
+                conn = this.redisPool.toCompletableFuture().join().acquire().join();
                 var entry = this.serviceParamsEntry = this.refreshParamsEntry(count, true);
+                var cmd = conn.sync();
                 CompletableFuture.runAsync(() -> GongdaobeiUtil.submitService(
                         entry.getKey(), entry.getValue(), cmd), Util.ioPool()).thenRun(this.redisClient::close);
-            } catch (ExecutionException | InterruptedException e) {
+            } catch (CancellationException | CompletionException e) {
                 // eat it
                 LOGGER.debug("The redis server is offline, no service data will be submitted", e);
+            } finally {
+                if (conn != null) {
+                    // noinspection resource
+                    this.redisPool.toCompletableFuture().join().release(conn).join();
+                }
+                this.redisPool.thenCompose(BoundedAsyncPool::closeAsync).toCompletableFuture().join();
+                this.redisClient.shutdownAsync().join();
             }
         }
     }
