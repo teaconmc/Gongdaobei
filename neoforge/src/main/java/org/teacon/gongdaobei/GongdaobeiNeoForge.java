@@ -36,6 +36,7 @@ import net.minecraft.network.Connection;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.dedicated.DedicatedPlayerList;
 import net.minecraft.server.dedicated.DedicatedServer;
+import net.minecraft.server.level.ClientInformation;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.server.network.CommonListenerCookie;
 import net.neoforged.fml.common.Mod;
@@ -60,6 +61,7 @@ import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
@@ -134,6 +136,7 @@ public final class GongdaobeiNeoForge {
         private final GongdaobeiTomlConfig.Service config;
         private final CompletionStage<BoundedAsyncPool<StatefulRedisMasterReplicaConnection<String, String>>> redisPool;
 
+        private @Nullable Map.Entry<GameProfile, Component> playerDisconnectMsg;
         private Map.Entry<HostAndPort, GongdaobeiServiceParams> serviceParamsEntry;
 
         public LockGuardedPlayerList(DedicatedServer server, GongdaobeiTomlConfig.Service config) {
@@ -207,13 +210,13 @@ public final class GongdaobeiNeoForge {
         }
 
         @Override
-        public void placeNewPlayer(Connection connection, ServerPlayer player, CommonListenerCookie cookie) {
-            var id = player.getUUID();
+        public ServerPlayer getPlayerForLogin(GameProfile gameProfile, ClientInformation clientInformation) {
+            var id = gameProfile.getId();
+            var name = gameProfile.getName();
             var entry = this.serviceParamsEntry;
             var conn = (StatefulRedisMasterReplicaConnection<String, String>) null;
             try {
                 var currentServer = this.getServer();
-                var name = player.getGameProfile().getName();
                 // noinspection resource
                 conn = this.redisPool.toCompletableFuture().join().acquire().join();
                 var holder = GongdaobeiUtil.tryLock(id, entry.getKey(), entry.getValue(), conn.sync());
@@ -258,18 +261,35 @@ public final class GongdaobeiNeoForge {
                 } else {
                     LOGGER.info("Synced player data / stats / advancements of {} ({}) from {}", name, id, hitTargets);
                 }
-                super.placeNewPlayer(connection, player, cookie);
+                return super.getPlayerForLogin(gameProfile, clientInformation);
             } catch (IOException e) {
                 LOGGER.warn(e.getMessage(), e);
-                connection.disconnect(DUPLICATE_LOGIN_DISCONNECT_MESSAGE);
+                this.playerDisconnectMsg = Map.entry(gameProfile, DUPLICATE_LOGIN_DISCONNECT_MESSAGE);
+                return super.getPlayerForLogin(gameProfile, clientInformation);
             } catch (CancellationException | CompletionException e) {
                 LOGGER.debug("The redis server is offline, no player data will be synced", e);
+                return super.getPlayerForLogin(gameProfile, clientInformation);
             } finally {
                 if (conn != null) {
                     // noinspection resource
                     this.redisPool.toCompletableFuture().join().release(conn).join();
                 }
             }
+        }
+
+        @Override
+        public void placeNewPlayer(Connection connection, ServerPlayer player, CommonListenerCookie cookie) {
+            var playerDisconnectMsg = this.playerDisconnectMsg;
+            if (playerDisconnectMsg != null) {
+                this.playerDisconnectMsg = null;
+                if (playerDisconnectMsg.getKey().equals(player.getGameProfile())) {
+                    connection.disconnect(playerDisconnectMsg.getValue());
+                } else {
+                    LOGGER.warn("Player {} ({}) created but not attempted to place in the world",
+                            playerDisconnectMsg.getKey().getName(), playerDisconnectMsg.getKey().getId());
+                }
+            }
+            super.placeNewPlayer(connection, player, cookie);
         }
 
         @Override
