@@ -90,6 +90,7 @@ public final class GongdaobeiVelocityCommand implements SimpleCommand {
             GongdaobeiConfirmation.collect(playerAddr, this.registry.get(), collected::put);
             // get player current confirmation
             var conn = this.redisPool.flatMap(p -> Mono.fromFuture(p.acquire(), true)).cache();
+            var release = this.redisPool.flatMap(p -> conn.map(c -> Mono.fromFuture(p.release(c), true)));
             var confirmation = conn.flatMap(c -> GongdaobeiUtil.fetchConfirmation(sourceUniqueId, c.reactive()));
             var next = switch (arguments.length) {
                 // no argument: transfer to another server
@@ -138,7 +139,7 @@ public final class GongdaobeiVelocityCommand implements SimpleCommand {
                     player.sendRichMessage(msg);
                 });
             };
-            var last = Mono.zip(next, conn, Pair::of).onErrorComplete().doOnSuccess(pair -> {
+            var last = Mono.zip(next, conn, Pair::of).flatMap(pair -> Mono.fromRunnable(() -> {
                 var target = pair.getKey();
                 var server = this.toRegisteredServer.apply(target);
                 if (server.isPresent()) {
@@ -150,9 +151,8 @@ public final class GongdaobeiVelocityCommand implements SimpleCommand {
                     var msg = "<lang:velocity.error.no-available-servers>";
                     player.sendRichMessage(msg);
                 }
-            });
-            var release = last.then(this.redisPool.flatMap(p -> conn.map(c -> Mono.fromFuture(p.release(c), true))));
-            release.subscribe();
+            }));
+            last.onErrorComplete().then(release).subscribe();
         }
     }
 
