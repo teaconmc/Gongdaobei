@@ -38,7 +38,7 @@ import io.lettuce.core.masterreplica.StatefulRedisMasterReplicaConnection;
 import io.lettuce.core.support.AsyncConnectionPoolSupport;
 import io.lettuce.core.support.BoundedAsyncPool;
 import io.lettuce.core.support.BoundedPoolConfig;
-import io.prometheus.client.exporter.HTTPServer;
+import io.prometheus.metrics.exporter.httpserver.HTTPServer;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer;
 import org.apache.commons.lang3.tuple.Pair;
@@ -117,7 +117,7 @@ public final class GongdaobeiVelocityNetworkEventHandler implements Runnable, Cl
         if (httpServerPort > 0) {
             try {
                 // noinspection resource
-                var httpServer = new HTTPServer.Builder().withPort(httpServerPort).build();
+                var httpServer = HTTPServer.builder().port(httpServerPort).buildAndStart();
                 this.logger.info("Launched the prometheus server at port " + httpServerPort);
                 prometheusCloseCallback = httpServer::close;
             } catch (IOException e) {
@@ -204,7 +204,7 @@ public final class GongdaobeiVelocityNetworkEventHandler implements Runnable, Cl
             // noinspection DuplicatedCode
             var params = registry.getParams(internalAddr);
             var serverName = this.cachedServerNameMap.get(internalAddr);
-            servicePerTick.labels(serverName).set(params.tickMillis / 1000.0);
+            servicePerTick.labelValues(serverName).set(params.tickMillis / 1000.0);
         }
         // noinspection DuplicatedCode
         for (var internalAddr : offlineServices) {
@@ -223,7 +223,7 @@ public final class GongdaobeiVelocityNetworkEventHandler implements Runnable, Cl
             // noinspection DuplicatedCode
             var params = registry.getParams(internalAddr);
             var serverName = this.cachedServerNameMap.get(internalAddr);
-            fallbackServicePerTick.labels(serverName).set(params.tickMillis / 1000.0);
+            fallbackServicePerTick.labelValues(serverName).set(params.tickMillis / 1000.0);
         }
         var offlineFallbacks = Sets.difference(oldFallback.getRight(), fallback.getRight());
         // noinspection DuplicatedCode
@@ -238,14 +238,14 @@ public final class GongdaobeiVelocityNetworkEventHandler implements Runnable, Cl
             var externalAddr = entry.getKey();
             var targetedOnline = current.getRight().stream().mapToInt(k -> registry.getParams(k).onlinePlayers).sum();
             var targetedMaximum = current.getRight().stream().mapToInt(k -> registry.getParams(k).maximumPlayers).sum();
-            targetedOnlinePlayers.labels(externalAddr.toString()).set(targetedOnline);
-            targetedMaximumPlayers.labels(externalAddr.toString()).set(targetedMaximum);
-            targetedServiceInstances.labels(externalAddr.toString()).set(current.getRight().size());
-            latestTargetedServiceInstances.labels(externalAddr.toString()).set(current.getLeft().size());
+            targetedOnlinePlayers.labelValues(externalAddr.toString()).set(targetedOnline);
+            targetedMaximumPlayers.labelValues(externalAddr.toString()).set(targetedMaximum);
+            targetedServiceInstances.labelValues(externalAddr.toString()).set(current.getRight().size());
+            latestTargetedServiceInstances.labelValues(externalAddr.toString()).set(current.getLeft().size());
             for (var internalAddr : current.getRight()) {
                 var params = registry.getParams(internalAddr);
                 var serverName = this.cachedServerNameMap.get(internalAddr);
-                targetedServicePerTick.labels(externalAddr.toString(), serverName).set(params.tickMillis / 1000.0);
+                targetedServicePerTick.labelValues(externalAddr.toString(), serverName).set(params.tickMillis / 1000.0);
             }
             var prev = oldTargeted.get(externalAddr);
             var offline = prev != null ? Sets.difference(prev.getRight(), current.getRight()) : Set.<HostAndPort>of();

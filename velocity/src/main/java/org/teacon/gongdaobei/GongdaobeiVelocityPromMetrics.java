@@ -17,8 +17,8 @@
  */
 package org.teacon.gongdaobei;
 
-import io.prometheus.client.Counter;
-import io.prometheus.client.Gauge;
+import io.prometheus.metrics.core.metrics.Counter;
+import io.prometheus.metrics.core.metrics.Gauge;
 
 public final class GongdaobeiVelocityPromMetrics {
     public static final Counter totalPings;
@@ -40,56 +40,56 @@ public final class GongdaobeiVelocityPromMetrics {
     public static final Gauge targetedServicePerTick;
 
     static {
-        totalPings = Counter.build(
-                "gongdaobei_pings_total",
-                "Total ping requests by clients").register();
-        totalLogins = Counter.build(
-                "gongdaobei_logins_total",
-                "Total login requests by clients").register();
-        totalLoginsWithAffinity = Counter.build(
-                "gongdaobei_logins_with_affinity_total",
-                "Total login requests by clients with affinity").register();
-        onlinePlayers = Gauge.build(
-                "gongdaobei_online_players",
-                "Online players of all the servers").register();
-        fallbackOnlinePlayers = Gauge.build(
-                "gongdaobei_fallback_online_players",
-                "Online players of fallback servers").register();
-        targetedOnlinePlayers = Gauge.build(
-                "gongdaobei_targeted_online_players",
-                "Online players of servers with the same external address").labelNames("address").register();
-        maximumPlayers = Gauge.build(
-                "gongdaobei_maximum_players",
-                "Maximum players of all the servers").register();
-        fallbackMaximumPlayers = Gauge.build(
-                "gongdaobei_fallback_maximum_players",
-                "Maximum players of servers marked as fallback servers").register();
-        targetedMaximumPlayers = Gauge.build(
-                "gongdaobei_targeted_maximum_players",
-                "Maximum players of servers with the same external address").labelNames("address").register();
-        serviceInstances = Gauge.build(
-                "gongdaobei_service_instances",
-                "The instance count of servers").register();
-        fallbackServiceInstances = Gauge.build(
-                "gongdaobei_fallback_service_instances",
-                "The instance count of fallback servers").register();
-        targetedServiceInstances = Gauge.build(
-                "gongdaobei_targeted_service_instances",
-                "The instance count of servers with the same external address").labelNames("address").register();
-        latestFallbackServiceInstances = Gauge.build(
-                "gongdaobei_latest_fallback_service_instances",
-                "The instance count of fallback servers whose version is latest").register();
-        latestTargetedServiceInstances = Gauge.build(
-                "gongdaobei_latest_targeted_service_instances",
-                "The instance count of servers with the same external address whose version is latest").labelNames("address").register();
-        servicePerTick = Gauge.build(
-                "gongdaobei_service_tick_duration_seconds",
-                "The time spent per tick in seconds").labelNames("name").register();
-        fallbackServicePerTick = Gauge.build(
-                "gongdaobei_fallback_service_tick_duration_seconds",
-                "The time spent per tick in seconds of fallback servers").labelNames("name").register();
-        targetedServicePerTick = Gauge.build(
-                "gongdaobei_targeted_service_tick_duration_seconds",
-                "The time spent per tick in seconds of servers grouped by external addresses").labelNames("address", "name").register();
+        totalPings = Counter.builder()
+                .name("gongdaobei_pings_total")
+                .help("Total ping requests by clients").register();
+        totalLogins = Counter.builder()
+                .name("gongdaobei_logins_total")
+                .help("Total login requests by clients").register();
+        totalLoginsWithAffinity = Counter.builder()
+                .name("gongdaobei_logins_with_affinity_total")
+                .help("Total login requests by clients with affinity").register();
+        onlinePlayers = Gauge.builder()
+                .name("gongdaobei_online_players")
+                .help("Online players of all the servers").register();
+        fallbackOnlinePlayers = Gauge.builder()
+                .name("gongdaobei_fallback_online_players")
+                .help("Online players of fallback servers").register();
+        targetedOnlinePlayers = Gauge.builder()
+                .name("gongdaobei_targeted_online_players")
+                .help("Online players of servers with the same external address").labelNames("address").register();
+        maximumPlayers = Gauge.builder()
+                .name("gongdaobei_maximum_players")
+                .help("Maximum players of all the servers").register();
+        fallbackMaximumPlayers = Gauge.builder()
+                .name("gongdaobei_fallback_maximum_players")
+                .help("Maximum players of servers marked as fallback servers").register();
+        targetedMaximumPlayers = Gauge.builder()
+                .name("gongdaobei_targeted_maximum_players")
+                .help("Maximum players of servers with the same external address").labelNames("address").register();
+        serviceInstances = Gauge.builder()
+                .name("gongdaobei_service_instances")
+                .help("The instance count of servers").register();
+        fallbackServiceInstances = Gauge.builder()
+                .name("gongdaobei_fallback_service_instances")
+                .help("The instance count of fallback servers").register();
+        targetedServiceInstances = Gauge.builder()
+                .name("gongdaobei_targeted_service_instances")
+                .help("The instance count of servers with the same external address").labelNames("address").register();
+        latestFallbackServiceInstances = Gauge.builder()
+                .name("gongdaobei_latest_fallback_service_instances")
+                .help("The instance count of fallback servers whose version is latest").register();
+        latestTargetedServiceInstances = Gauge.builder()
+                .name("gongdaobei_latest_targeted_service_instances")
+                .help("The instance count of servers with the same external address whose version is latest").labelNames("address").register();
+        servicePerTick = Gauge.builder()
+                .name("gongdaobei_service_tick_duration_seconds")
+                .help("The time spent per tick in seconds").labelNames("name").register();
+        fallbackServicePerTick = Gauge.builder()
+                .name("gongdaobei_fallback_service_tick_duration_seconds")
+                .help("The time spent per tick in seconds of fallback servers").labelNames("name").register();
+        targetedServicePerTick = Gauge.builder()
+                .name("gongdaobei_targeted_service_tick_duration_seconds")
+                .help("The time spent per tick in seconds of servers grouped by external addresses").labelNames("address", "name").register();
     }
 }
