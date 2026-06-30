@@ -66,6 +66,7 @@ import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.TimeUnit;
 
 import static net.minecraft.world.level.storage.LevelResource.PLAYER_ADVANCEMENTS_DIR;
 import static net.minecraft.world.level.storage.LevelResource.PLAYER_STATS_DIR;
@@ -93,7 +94,7 @@ public final class GongdaobeiNeoForge {
             if (this.config.syncPlayersFromRedis()) {
                 server.setPlayerList(this.lockGuardedPlayerList);
             }
-            Util.nonCriticalIoPool().execute(() -> server.execute(this.lockGuardedPlayerList::tickSubmitService));
+            server.execute(this.lockGuardedPlayerList::tickSubmitService);
         }
     }
 
@@ -405,11 +406,11 @@ public final class GongdaobeiNeoForge {
 
         public void tickSubmitService() {
             var conn = (StatefulRedisMasterReplicaConnection<String, String>) null;
-            var serviceTickSeconds = Util.getNanos() / 1_000_000_000L;
             var server = this.getServer();
             try {
-                if (serviceTickSeconds > this.serviceTickSeconds) {
-                    this.serviceTickSeconds = serviceTickSeconds;
+                var serviceTickNanos = Util.getNanos();
+                if (serviceTickNanos / 1_000_000_000L > this.serviceTickSeconds) {
+                    this.serviceTickSeconds = serviceTickNanos / 1_000_000_000L;
                     // noinspection resource
                     conn = this.redisPool.toCompletableFuture().join().acquire().join();
                     var e = this.serviceParamsEntry = this.refreshParamsEntry(server.getTickCount(), false);
@@ -424,7 +425,10 @@ public final class GongdaobeiNeoForge {
                     this.redisPool.toCompletableFuture().join().release(conn).join();
                 }
                 if (!server.isStopped()) {
-                    Util.nonCriticalIoPool().execute(() -> server.execute(this::tickSubmitService));
+                    var serviceTickNanos = Util.getNanos();
+                    var serviceDelay = 1_000_000_000L - serviceTickNanos % 1_000_000_000L;
+                    var serviceDelayExecutor = CompletableFuture.delayedExecutor(serviceDelay, TimeUnit.NANOSECONDS);
+                    CompletableFuture.runAsync(this::tickSubmitService, serviceDelayExecutor);
                 }
             }
         }
